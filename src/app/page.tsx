@@ -1,631 +1,249 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useConnection, useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { PublicKey, Transaction, TransactionInstruction, SystemProgram } from '@solana/web3.js';
-import { PROGRAM_ID, POOLS, DENOMINATIONS } from '@/config';
-import { supabase, User, PendingTransfer, Notification } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
 
-const DISCRIMINATORS = { deposit: [242, 35, 198, 137, 82, 225, 242, 182] };
-const AGENT_URL = process.env.NEXT_PUBLIC_AGENT_URL || 'http://localhost:3002';
+export default function HomePage() {
+  const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [launching, setLaunching] = useState(false);
 
-async function generateZKProof(secret: string, nullifier: string, poolId: number) {
-  const snarkjs = (await import('snarkjs')).default || await import('snarkjs');
-  const { buildPoseidon } = await import('circomlibjs');
-  const poseidon = await buildPoseidon();
-  const F = poseidon.F;
-  
-  const secretBigInt = BigInt('0x' + secret.slice(0, 32));
-  const nullifierBigInt = BigInt('0x' + nullifier.slice(0, 32));
-  const commitment = F.toObject(poseidon([secretBigInt, nullifierBigInt]));
-  const nullifierHash = F.toObject(poseidon([nullifierBigInt]));
-  
-  const merkleRes = await fetch(`${AGENT_URL}/merkle-proof/${poolId}/${commitment.toString()}`);
-  if (!merkleRes.ok) throw new Error('Commitment not found. Make a new deposit first.');
-  const merkleData = await merkleRes.json();
-  
-  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
-    {
-      secret: secretBigInt.toString(),
-      nullifier: nullifierBigInt.toString(),
-      pathElements: merkleData.pathElements,
-      pathIndices: merkleData.pathIndices,
-      root: merkleData.root,
-      nullifierHash: nullifierHash.toString(),
-    },
-    '/zk/mixer.wasm',
-    '/zk/mixer_final.zkey'
-  );
-  
-  return { proof, publicSignals, root: merkleData.root };
-}
-
-async function registerDeposit(secret: string, nullifier: string, poolId: number) {
-  const { buildPoseidon } = await import('circomlibjs');
-  const poseidon = await buildPoseidon();
-  const F = poseidon.F;
-  
-  const secretBigInt = BigInt('0x' + secret.slice(0, 32));
-  const nullifierBigInt = BigInt('0x' + nullifier.slice(0, 32));
-  const commitment = F.toObject(poseidon([secretBigInt, nullifierBigInt]));
-  
-  const res = await fetch(`${AGENT_URL}/deposit`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ commitment: commitment.toString(), poolId }),
-  });
-  return res.json();
-}
-
-const generateSecret = (): string => {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-};
-
-const generateNullifier = (): string => {
-  const array = new Uint8Array(32);
-  crypto.getRandomValues(array);
-  return Array.from(array).map(b => b.toString(16).padStart(2, '0')).join('');
-};
-
-const createNote = (poolId: number, amount: number, secret: string, nullifier: string): string => {
-  return `shadow-${poolId}-${amount}-${secret}-${nullifier}`;
-};
-
-const parseNote = (note: string) => {
-  const parts = note.split('-');
-  if (parts.length !== 5 || (parts[0] !== 'shadow' && parts[0] !== 'phantom')) return null;
-  return { poolId: parseInt(parts[1]), amount: parseFloat(parts[2]), secret: parts[3], nullifier: parts[4] };
-};
-
-const hexToBytes = (hex: string): number[] => {
-  const bytes = [];
-  for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
-  return bytes;
-};
-
-export default function Home() {
-  const { connection } = useConnection();
-  const { publicKey, sendTransaction, connected } = useWallet();
-  
-  const [activeTab, setActiveTab] = useState<'deposit' | 'send' | 'withdraw' | 'activity'>('deposit');
-  const [selectedPool, setSelectedPool] = useState(DENOMINATIONS[1]);
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
-  
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [showRegister, setShowRegister] = useState(false);
-  const [pseudoInput, setPseudoInput] = useState('');
-  const [generatedNote, setGeneratedNote] = useState<string | null>(null);
-  const [withdrawNote, setWithdrawNote] = useState('');
-  const [withdrawAddress, setWithdrawAddress] = useState('');
-  const [recipientPseudo, setRecipientPseudo] = useState('');
-  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([]);
-  const [savedNotes, setSavedNotes] = useState<any[]>([]);
-  const [vaultBalances, setVaultBalances] = useState<{[key: number]: number}>({});
-  const [agentStatus, setAgentStatus] = useState<any>(null);
-  const [pendingWithdrawals, setPendingWithdrawals] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (publicKey) loadUser();
-    else setCurrentUser(null);
-    loadVaultBalances();
-    checkAgent();
-  }, [publicKey]);
-
-  useEffect(() => {
-    if (currentUser) loadPendingTransfers();
-    const interval = setInterval(() => {
-      loadPendingTransfers();
-      loadVaultBalances();
-      checkAgent();
-      updatePendingWithdrawals();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [currentUser]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem('shadow_mixer_notes');
-    if (stored) setSavedNotes(JSON.parse(stored));
-    const storedW = localStorage.getItem('shadow_pending_withdrawals');
-    if (storedW) setPendingWithdrawals(JSON.parse(storedW));
-  }, []);
-
-  const checkAgent = async () => {
+  const playLaunchSound = () => {
     try {
-      const res = await fetch(`${AGENT_URL}/status`);
-      setAgentStatus(await res.json());
-    } catch { setAgentStatus(null); }
-  };
-
-  const updatePendingWithdrawals = async () => {
-    const updated = [];
-    for (const w of pendingWithdrawals) {
-      if (w.status === 'completed' || w.status === 'failed') { updated.push(w); continue; }
-      try {
-        const res = await fetch(`${AGENT_URL}/withdraw/${w.id}`);
-        const data = await res.json();
-        updated.push({ ...w, ...data });
-        if (data.status === 'completed') {
-          const notes = savedNotes.map(n => n.note === w.note ? { ...n, status: 'withdrawn' } : n);
-          setSavedNotes(notes);
-          localStorage.setItem('shadow_mixer_notes', JSON.stringify(notes));
-        }
-      } catch { updated.push(w); }
-    }
-    setPendingWithdrawals(updated);
-    localStorage.setItem('shadow_pending_withdrawals', JSON.stringify(updated));
-  };
-
-  const loadVaultBalances = async () => {
-    try {
-      const balances: {[key: number]: number} = {};
-      for (const pool of DENOMINATIONS) {
-        balances[pool.id] = (await connection.getBalance(pool.vaultPDA)) / 1e9;
-      }
-      setVaultBalances(balances);
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Dramatic whoosh/bat screech effect
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const osc3 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      const gain2 = ctx.createGain();
+      const gain3 = ctx.createGain();
+      
+      osc1.connect(gain1); gain1.connect(ctx.destination);
+      osc2.connect(gain2); gain2.connect(ctx.destination);
+      osc3.connect(gain3); gain3.connect(ctx.destination);
+      
+      // High pitch screech
+      osc1.type = 'sawtooth';
+      osc1.frequency.setValueAtTime(2000, ctx.currentTime);
+      osc1.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.5);
+      gain1.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+      
+      // Low rumble
+      osc2.type = 'sine';
+      osc2.frequency.setValueAtTime(80, ctx.currentTime);
+      osc2.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.6);
+      gain2.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.6);
+      
+      // Mid swoosh
+      osc3.type = 'triangle';
+      osc3.frequency.setValueAtTime(800, ctx.currentTime);
+      osc3.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.4);
+      gain3.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain3.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+      
+      osc1.start(ctx.currentTime); osc1.stop(ctx.currentTime + 0.5);
+      osc2.start(ctx.currentTime); osc2.stop(ctx.currentTime + 0.6);
+      osc3.start(ctx.currentTime); osc3.stop(ctx.currentTime + 0.4);
     } catch {}
   };
 
-  const loadUser = async () => {
-    if (!publicKey) return;
-    const { data } = await supabase.from('users').select('*').eq('wallet_address', publicKey.toString()).single();
-    if (data) { setCurrentUser(data); setShowRegister(false); }
-    else setShowRegister(true);
+  const handleLaunch = () => {
+    setLaunching(true);
+    playLaunchSound();
+    setTimeout(() => router.push('/main'), 800);
   };
 
-  const registerUser = async () => {
-    if (!publicKey || !pseudoInput.trim()) return;
-    const pseudo = pseudoInput.trim().toLowerCase();
-    if (pseudo.length < 3) { setStatus({ type: 'error', message: 'Min 3 characters' }); return; }
-    setLoading(true);
-    const { data: existing } = await supabase.from('users').select('id').eq('pseudo', pseudo).single();
-    if (existing) { setStatus({ type: 'error', message: 'Username taken' }); setLoading(false); return; }
-    const { data } = await supabase.from('users').insert([{ pseudo, wallet_address: publicKey.toString() }]).select().single();
-    if (data) { setCurrentUser(data); setShowRegister(false); }
-    setLoading(false);
-  };
+  useEffect(() => { setMounted(true); }, []);
 
-  const loadPendingTransfers = async () => {
-    if (!currentUser) return;
-    const { data } = await supabase.from('pending_transfers').select('*').eq('recipient_pseudo', currentUser.pseudo).eq('claimed', false);
-    if (data) setPendingTransfers(data);
-  };
-
-  const handleDeposit = async () => {
-    if (!publicKey || !connected) { setStatus({ type: 'error', message: 'Connect your wallet' }); return; }
-    setLoading(true);
-    setStatus({ type: 'info', message: 'Preparing deposit...' });
-    setGeneratedNote(null);
-
-    try {
-      const secret = generateSecret();
-      const nullifier = generateNullifier();
-      const note = createNote(selectedPool.id, selectedPool.value, secret, nullifier);
-      
-      setStatus({ type: 'info', message: 'Registering in Merkle Tree...' });
-      const depositResult = await registerDeposit(secret, nullifier, selectedPool.id);
-      
-      setStatus({ type: 'info', message: 'Confirm in wallet...' });
-      const commitment = new Uint8Array(hexToBytes(secret.slice(0, 64)));
-      const data = Buffer.concat([Buffer.from(DISCRIMINATORS.deposit), Buffer.from(commitment)]);
-      
-      const instruction = new TransactionInstruction({
-        keys: [
-          { pubkey: selectedPool.poolPDA, isSigner: false, isWritable: true },
-          { pubkey: selectedPool.vaultPDA, isSigner: false, isWritable: true },
-          { pubkey: publicKey, isSigner: true, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        programId: PROGRAM_ID,
-        data: data,
-      });
-
-      const transaction = new Transaction().add(instruction);
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-      
-      const signature = await sendTransaction(transaction, connection);
-      setStatus({ type: 'info', message: 'Confirming on-chain...' });
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
-
-      const newNote = { id: Date.now().toString(), note, poolId: selectedPool.id, amount: selectedPool.value, timestamp: Date.now(), status: 'active', tx: signature, merkleIndex: depositResult.index };
-      const notes = [...savedNotes, newNote];
-      setSavedNotes(notes);
-      localStorage.setItem('shadow_mixer_notes', JSON.stringify(notes));
-      setGeneratedNote(note);
-      loadVaultBalances();
-      setStatus({ type: 'success', message: `Deposit confirmed!\nMerkle Index: ${depositResult.index}` });
-    } catch (error: any) {
-      setStatus({ type: 'error', message: error.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendByPseudo = async () => {
-    if (!publicKey || !connected || !currentUser) return;
-    const recipient = recipientPseudo.trim().toLowerCase().replace('@', '');
-    if (!recipient) return;
-
-    const { data: recipientUser } = await supabase.from('users').select('*').eq('pseudo', recipient).single();
-    if (!recipientUser) { setStatus({ type: 'error', message: 'User not found' }); return; }
-
-    setLoading(true);
-    setStatus({ type: 'info', message: 'Creating transfer...' });
-
-    try {
-      const secret = generateSecret();
-      const nullifier = generateNullifier();
-      const note = createNote(selectedPool.id, selectedPool.value, secret, nullifier);
-      
-      await registerDeposit(secret, nullifier, selectedPool.id);
-      
-      const commitment = new Uint8Array(hexToBytes(secret.slice(0, 64)));
-      const data = Buffer.concat([Buffer.from(DISCRIMINATORS.deposit), Buffer.from(commitment)]);
-      
-      const instruction = new TransactionInstruction({
-        keys: [
-          { pubkey: selectedPool.poolPDA, isSigner: false, isWritable: true },
-          { pubkey: selectedPool.vaultPDA, isSigner: false, isWritable: true },
-          { pubkey: publicKey, isSigner: true, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        programId: PROGRAM_ID,
-        data: data,
-      });
-
-      const transaction = new Transaction().add(instruction);
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-      
-      const signature = await sendTransaction(transaction, connection);
-      await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
-
-      await supabase.from('pending_transfers').insert([{ recipient_pseudo: recipient, encrypted_note: note, amount: selectedPool.value, sender_pseudo: currentUser.pseudo }]);
-      await supabase.from('notifications').insert([{ recipient_pseudo: recipient, type: 'received', message: `${selectedPool.value} SOL from @${currentUser.pseudo}`, amount: selectedPool.value, sender_pseudo: currentUser.pseudo }]);
-
-      loadVaultBalances();
-      setStatus({ type: 'success', message: `Sent to @${recipient}` });
-      setRecipientPseudo('');
-    } catch (error: any) {
-      setStatus({ type: 'error', message: error.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClaimTransfer = async (transfer: PendingTransfer) => {
-    if (!currentUser) return;
-    setLoading(true);
-    try {
-      await supabase.from('pending_transfers').update({ claimed: true }).eq('id', transfer.id);
-      const parsed = parseNote(transfer.encrypted_note);
-      const newNote = { id: Date.now().toString(), note: transfer.encrypted_note, poolId: parsed?.poolId || 1, amount: transfer.amount, timestamp: Date.now(), status: 'active', from: transfer.sender_pseudo };
-      const notes = [...savedNotes, newNote];
-      setSavedNotes(notes);
-      localStorage.setItem('shadow_mixer_notes', JSON.stringify(notes));
-      loadPendingTransfers();
-      setStatus({ type: 'success', message: 'Claimed!' });
-    } catch (error: any) {
-      setStatus({ type: 'error', message: error.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleWithdraw = async () => {
-    if (!withdrawNote || !withdrawAddress) {
-      setStatus({ type: 'error', message: 'Fill all fields' });
-      return;
-    }
-
-    const parsed = parseNote(withdrawNote);
-    if (!parsed) { setStatus({ type: 'error', message: 'Invalid note' }); return; }
-    if (!agentStatus) { setStatus({ type: 'error', message: 'Agent offline' }); return; }
-
-    setLoading(true);
-    setStatus({ type: 'info', message: 'Generating ZK proof...' });
-
-    try {
-      const { proof, publicSignals } = await generateZKProof(parsed.secret, parsed.nullifier, parsed.poolId);
-      
-      setStatus({ type: 'info', message: 'Verifying proof...' });
-
-      const response = await fetch(`${AGENT_URL}/withdraw`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          proof, publicSignals,
-          recipientAddress: withdrawAddress,
-          poolId: parsed.poolId,
-          amount: parsed.amount,
-        })
-      });
-      
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error);
-
-      const newW = { id: result.id, note: withdrawNote, amount: result.amount, numHops: result.numHops, status: 'pending', zkVerified: result.zkVerified, delayReason: result.delayReason, delayFormatted: result.delayFormatted, createdAt: Date.now() };
-      const ws = [...pendingWithdrawals, newW];
-      setPendingWithdrawals(ws);
-      localStorage.setItem('shadow_pending_withdrawals', JSON.stringify(ws));
-
-      setStatus({ type: 'success', message: `ZK Proof verified!\n\nDelay: ${result.delayFormatted}\nReason: ${result.delayReason}\nRelayer #${result.relayerId} | ${result.numHops} hops` });
-      setWithdrawNote('');
-      setWithdrawAddress('');
-    } catch (error: any) {
-      setStatus({ type: 'error', message: error.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const copyNote = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setStatus({ type: 'success', message: 'Copied!' });
-    setTimeout(() => setStatus(null), 2000);
-  };
-
-  const activeW = pendingWithdrawals.filter(w => w.status === 'pending' || w.status === 'processing');
-
-  if (connected && showRegister) {
-    return (
-      <div className="min-h-screen bg-[#0a0a0f] flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-900/20 via-transparent to-cyan-900/20" />
-        <div className="relative w-full max-w-md">
-          <div className="relative bg-[#12121a] border border-white/10 rounded-2xl p-8">
-            <img src="/images/shadow-logo.png" alt="Shadow" className="h-32 mx-auto mb-6" />
-            <h1 className="text-2xl font-bold text-white text-center mb-2">Create Identity</h1>
-            <p className="text-gray-500 text-center mb-6">Choose your anonymous username</p>
-            <div className="relative mb-6">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500">@</span>
-              <input type="text" value={pseudoInput} onChange={(e) => setPseudoInput(e.target.value.replace(/[^a-zA-Z0-9_]/g, ''))} placeholder="username" className="w-full pl-10 pr-4 py-4 bg-black/50 border border-white/10 rounded-xl text-white focus:border-purple-500 focus:outline-none" maxLength={20} />
-            </div>
-            <button onClick={registerUser} disabled={loading || pseudoInput.length < 3} className={`w-full py-4 rounded-xl font-semibold transition-all ${loading || pseudoInput.length < 3 ? 'bg-gray-800 text-gray-600' : 'bg-gradient-to-r from-purple-600 to-cyan-600 text-white hover:opacity-90 active:scale-[0.98]'}`}>
-              {loading ? '...' : 'Continue'}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-[#0a0a0f] text-white">
-      <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-cyan-600/10 rounded-full blur-3xl animate-pulse" />
-      </div>
-
-      {/* HEADER */}
-      <header className="relative border-b border-white/5 backdrop-blur-xl">
-        <div className="max-w-6xl mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-6">
-              <img src="/images/shadow-logo.png" alt="Shadow" className="h-20 w-auto drop-shadow-[0_0_20px_rgba(139,92,246,0.4)]" />
-              <div className="flex flex-col">
-                {currentUser && (
-                  <span className="text-green-400 font-bold text-2xl">@{currentUser.pseudo}</span>
-                )}
-                <div className="flex items-center gap-2 text-sm mt-1">
-                  {agentStatus ? (
-                    <span className="text-green-400 flex items-center gap-1.5">
-                      <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                      Agent Online
-                    </span>
-                  ) : (
-                    <span className="text-red-400 flex items-center gap-1.5">
-                      <span className="w-2 h-2 bg-red-400 rounded-full" />
-                      Offline
-                    </span>
-                  )}
-                </div>
-              </div>
+    <div className="min-h-screen bg-black text-white overflow-x-hidden font-mono">
+      {/* Launch Animation Overlay */}
+      {launching && (
+        <div className="fixed inset-0 z-[100] bg-black flex items-center justify-center animate-launchFlash">
+          <div className="text-center animate-launchZoom">
+            <div className="w-32 h-32 mx-auto mb-6 relative">
+              <div className="absolute inset-0 bg-[#8B5CF6] blur-[60px] animate-pulse" />
+              <img src="/logo.png" alt="Shadow" className="relative w-full h-full object-contain" />
             </div>
-            <WalletMultiButton className="!bg-purple-600/20 !border !border-purple-500/30 !rounded-xl !h-12 !px-6 !font-semibold hover:!bg-purple-600/30 transition-all" />
+            <p className="text-[14px] tracking-[0.4em] uppercase text-[#8B5CF6] animate-pulse">Entering Shadow...</p>
+          </div>
+          {/* Particle burst */}
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
+            {Array.from({ length: 20 }).map((_, i) => (
+              <div
+                key={i}
+                className="absolute w-2 h-2 bg-[#8B5CF6] rounded-full animate-particleBurst"
+                style={{
+                  left: '50%',
+                  top: '50%',
+                  animationDelay: `${i * 0.03}s`,
+                  transform: `rotate(${i * 18}deg)`,
+                }}
+              />
+            ))}
           </div>
         </div>
-      </header>
+      )}
 
-      {/* Navigation */}
-      <div className="max-w-6xl mx-auto px-6 mt-8">
-        <div className="flex gap-2 p-1.5 bg-white/5 rounded-xl w-fit">
-          {['deposit', 'send', 'withdraw', 'activity'].map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab as any)} className={`px-7 py-3 rounded-lg font-semibold transition-all ${activeTab === tab ? 'bg-gradient-to-r from-purple-600 to-cyan-600 text-white shadow-lg shadow-purple-500/20' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}>
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+      {/* Background */}
+      <div className="fixed inset-0 opacity-30">
+        <div className="absolute inset-0 bg-gradient-to-br from-[#8B5CF6]/10 via-transparent to-[#6366F1]/10" />
+        <div className="absolute top-1/4 left-1/4 w-64 md:w-96 h-64 md:h-96 bg-[#8B5CF6]/20 rounded-full blur-[100px] md:blur-[150px] animate-pulse" />
+        <div className="absolute bottom-1/4 right-1/4 w-64 md:w-96 h-64 md:h-96 bg-[#6366F1]/20 rounded-full blur-[100px] md:blur-[150px] animate-pulse" style={{ animationDelay: '1s' }} />
+      </div>
+
+      {/* Grid */}
+      <div className="fixed inset-0 opacity-[0.04]">
+        <div className="absolute inset-0" style={{ backgroundImage: 'linear-gradient(#8B5CF6 1px, transparent 1px), linear-gradient(90deg, #8B5CF6 1px, transparent 1px)', backgroundSize: '50px 50px' }} />
+      </div>
+
+      {/* Header */}
+      <header className="relative border-b border-white/[0.08] backdrop-blur-xl bg-black/50 sticky top-0 z-50">
+        <div className="w-full px-4 md:px-8 py-3 md:py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 md:gap-3">
+            <img src="/logo.png" alt="Shadow" className="w-7 h-7 md:w-8 md:h-8 object-contain" />
+            <span className="text-[13px] md:text-[14px] font-bold tracking-[0.2em] uppercase">Shadow</span>
+          </div>
+
+          <div className="hidden md:flex items-center gap-3">
+            <a href="https://x.com/shadowp40792" target="_blank" rel="noopener noreferrer" className="w-10 h-10 flex items-center justify-center border border-white/[0.15] hover:border-[#8B5CF6]/50 hover:bg-[#8B5CF6]/10 transition-all">
+              <svg className="w-4 h-4 text-white/70" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
+            </a>
+            <a href="https://github.com/Shadowprtcl" target="_blank" rel="noopener noreferrer" className="w-10 h-10 flex items-center justify-center border border-white/[0.15] hover:border-[#8B5CF6]/50 hover:bg-[#8B5CF6]/10 transition-all">
+              <svg className="w-4 h-4 text-white/70" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" /></svg>
+            </a>
+            <a href="/docs" className="px-5 py-2.5 border border-white/[0.15] text-[10px] tracking-[0.2em] uppercase font-bold hover:border-[#8B5CF6]/50 hover:bg-[#8B5CF6]/10 transition-all">Docs</a>
+            <button onClick={handleLaunch} className="px-6 py-2.5 bg-[#8B5CF6] text-white text-[10px] tracking-[0.2em] uppercase font-bold hover:bg-[#7C3AED] hover:shadow-[0_0_30px_rgba(139,92,246,0.5)] transition-all">Launch App</button>
+          </div>
+
+          <div className="flex md:hidden items-center gap-2">
+            <button onClick={handleLaunch} className="px-4 py-2 bg-[#8B5CF6] text-white text-[9px] tracking-[0.15em] uppercase font-bold">App</button>
+            <button onClick={() => setMenuOpen(!menuOpen)} className="w-9 h-9 flex items-center justify-center border border-white/[0.15]">
+              <svg className="w-4 h-4 text-white/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                {menuOpen ? <path strokeLinecap="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
+              </svg>
             </button>
-          ))}
-        </div>
-      </div>
-
-      <main className="max-w-6xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          <div className="lg:col-span-2 bg-[#12121a] border border-white/5 rounded-2xl p-6">
-            
-            {activeTab === 'deposit' && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-2xl font-bold">Deposit</h2>
-                  <p className="text-gray-500">Select amount and receive a secret note</p>
-                </div>
-                <div className="grid grid-cols-3 gap-4">
-                  {DENOMINATIONS.map((pool) => (
-                    <button key={pool.id} onClick={() => setSelectedPool(pool)} className={`p-6 rounded-xl border transition-all hover:scale-[1.02] active:scale-[0.98] ${selectedPool.id === pool.id ? 'border-purple-500 bg-purple-500/10 shadow-lg shadow-purple-500/10' : 'border-white/10 hover:border-white/20'}`}>
-                      <div className="text-2xl font-bold">{pool.label}</div>
-                      {agentStatus?.pools?.[pool.id] && (
-                        <div className="text-xs text-purple-400 mt-2">{agentStatus.pools[pool.id].deposits} deposits</div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                <button onClick={handleDeposit} disabled={loading || !connected} className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${loading || !connected ? 'bg-gray-800 text-gray-600' : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:opacity-90 active:scale-[0.99] shadow-lg shadow-purple-500/20'}`}>
-                  {loading ? 'Processing...' : `Deposit ${selectedPool.label}`}
-                </button>
-                {generatedNote && (
-                  <div className="bg-green-500/10 border border-green-500/20 rounded-xl p-6">
-                    <h3 className="text-green-400 font-bold text-lg mb-2">Secret Note Generated</h3>
-                    <p className="text-sm text-gray-500 mb-3">Save this! You need it to withdraw.</p>
-                    <div className="bg-black/30 p-4 rounded-lg font-mono text-sm text-green-300 break-all">{generatedNote}</div>
-                    <button onClick={() => copyNote(generatedNote)} className="mt-4 w-full py-3 bg-green-500/20 hover:bg-green-500/30 rounded-xl text-green-400 font-bold transition-colors">Copy Note</button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'send' && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-2xl font-bold">Send</h2>
-                  <p className="text-gray-500">Anonymous transfer to another user</p>
-                </div>
-                {!currentUser ? <p className="text-yellow-400">Connect wallet first</p> : (
-                  <>
-                    <div className="grid grid-cols-3 gap-4">
-                      {DENOMINATIONS.map((pool) => (
-                        <button key={pool.id} onClick={() => setSelectedPool(pool)} className={`p-4 rounded-xl border transition-all hover:scale-[1.02] active:scale-[0.98] font-semibold ${selectedPool.id === pool.id ? 'border-purple-500 bg-purple-500/10' : 'border-white/10'}`}>
-                          {pool.label}
-                        </button>
-                      ))}
-                    </div>
-                    <input type="text" value={recipientPseudo} onChange={(e) => setRecipientPseudo(e.target.value)} placeholder="@username" className="w-full p-4 bg-black/30 border border-white/10 rounded-xl text-white text-lg focus:border-purple-500 focus:outline-none" />
-                    <button onClick={handleSendByPseudo} disabled={loading || !recipientPseudo} className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${loading ? 'bg-gray-800 text-gray-600' : 'bg-gradient-to-r from-purple-600 to-cyan-600 hover:opacity-90 active:scale-[0.99] shadow-lg shadow-purple-500/20'}`}>
-                      {loading ? 'Sending...' : `Send ${selectedPool.label}`}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'withdraw' && (
-              <div className="space-y-6">
-                <div>
-                  <h2 className="text-2xl font-bold">Withdraw</h2>
-                  <p className="text-gray-500">ZK proof verification</p>
-                </div>
-                {agentStatus && (
-                  <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl flex items-center gap-3">
-                    <span className="w-3 h-3 bg-green-400 rounded-full animate-pulse" />
-                    <span className="text-green-400 font-semibold">Agent Online</span>
-                    <span className="text-gray-500">•</span>
-                    <span className="text-gray-400">{agentStatus.relayerCount} relayers</span>
-                  </div>
-                )}
-                <textarea value={withdrawNote} onChange={(e) => setWithdrawNote(e.target.value)} placeholder="shadow-1-1-secret-nullifier" rows={3} className="w-full p-4 bg-black/30 border border-white/10 rounded-xl text-white font-mono text-sm focus:border-purple-500 focus:outline-none resize-none" />
-                <div>
-                  <input type="text" value={withdrawAddress} onChange={(e) => setWithdrawAddress(e.target.value)} placeholder="Destination Solana address" className="w-full p-4 bg-black/30 border border-white/10 rounded-xl text-white font-mono text-sm focus:border-purple-500 focus:outline-none" />
-                  <p className="text-xs text-gray-500 mt-2">Use a NEW address for maximum privacy</p>
-                </div>
-                <button onClick={handleWithdraw} disabled={loading || !withdrawNote || !withdrawAddress} className={`w-full py-4 rounded-xl font-bold text-lg transition-all ${loading ? 'bg-gray-800 text-gray-600' : 'bg-gradient-to-r from-green-600 to-emerald-600 hover:opacity-90 active:scale-[0.99] shadow-lg shadow-green-500/20'}`}>
-                  {loading ? 'Generating ZK proof...' : 'Withdraw with ZK Proof'}
-                </button>
-                
-                {activeW.length > 0 && (
-                  <div className="space-y-3 mt-6">
-                    <h3 className="text-sm text-gray-400 font-bold uppercase">Pending Withdrawals</h3>
-                    {activeW.map(w => (
-                      <div key={w.id} className="bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-4">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <span className="font-bold text-lg">{w.amount} SOL</span>
-                            {w.zkVerified && <span className="ml-2 text-xs text-green-400 font-semibold">ZK ✓</span>}
-                          </div>
-                          <span className="text-yellow-400 font-semibold">{w.timeRemainingFormatted || '...'}</span>
-                        </div>
-                        {w.delayReason && <p className="text-sm text-gray-500 mt-2">{w.delayReason}</p>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {activeTab === 'activity' && (
-              <div className="space-y-6">
-                <h2 className="text-2xl font-bold">Activity</h2>
-                
-                {pendingTransfers.length > 0 && (
-                  <div className="space-y-3">
-                    <h3 className="text-sm text-gray-400 font-bold uppercase">To Claim</h3>
-                    {pendingTransfers.map(t => (
-                      <div key={t.id} className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-4 flex justify-between items-center">
-                        <div>
-                          <span className="font-bold text-lg">{t.amount} SOL</span>
-                          <span className="text-gray-500 ml-2">from @{t.sender_pseudo}</span>
-                        </div>
-                        <button onClick={() => handleClaimTransfer(t)} className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 rounded-xl font-bold transition-colors">Claim</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {savedNotes.length > 0 && (
-                  <div className="space-y-3">
-                    <h3 className="text-sm text-gray-400 font-bold uppercase">My Notes</h3>
-                    {savedNotes.map(n => (
-                      <div key={n.id} className={`border rounded-xl p-4 ${n.status === 'withdrawn' ? 'border-white/5 opacity-50' : 'border-white/10'}`}>
-                        <div className="flex justify-between mb-2">
-                          <span className="font-bold text-lg">{n.amount} SOL</span>
-                          <span className={`text-xs px-3 py-1 rounded-full font-semibold ${n.status === 'withdrawn' ? 'bg-gray-700 text-gray-400' : 'bg-green-500/20 text-green-400'}`}>
-                            {n.status === 'withdrawn' ? 'Withdrawn' : 'Active'}
-                          </span>
-                        </div>
-                        <div className="bg-black/30 p-3 rounded-lg font-mono text-xs text-gray-500 break-all">{n.note}</div>
-                        {n.status === 'active' && (
-                          <div className="flex gap-2 mt-3">
-                            <button onClick={() => copyNote(n.note)} className="px-4 py-2 bg-white/5 hover:bg-white/10 rounded-lg font-semibold transition-colors">Copy</button>
-                            <button onClick={() => { setWithdrawNote(n.note); setActiveTab('withdraw'); }} className="px-4 py-2 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-lg font-semibold transition-colors">Withdraw</button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-                
-                {pendingTransfers.length === 0 && savedNotes.length === 0 && (
-                  <div className="text-center py-12 text-gray-600">No activity yet</div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            <div className="bg-[#12121a] border border-white/5 rounded-2xl p-6">
-              <h3 className="text-sm text-gray-400 font-bold uppercase mb-4">Shadow Agent</h3>
-              {agentStatus ? (
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between"><span className="text-gray-500">Status</span><span className="text-green-400 font-semibold">Online</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">Relayers</span><span className="font-semibold">{agentStatus.relayerCount}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">ZK Proofs</span><span className="text-green-400 font-semibold">Enabled</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">Merkle Tree</span><span className="text-green-400 font-semibold">Enabled</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">Completed</span><span className="font-semibold">{agentStatus.totalCompleted}</span></div>
-                </div>
-              ) : <p className="text-red-400 font-semibold">Offline</p>}
-            </div>
-
-            <div className="bg-[#12121a] border border-white/5 rounded-2xl p-6">
-              <h3 className="text-sm text-gray-400 font-bold uppercase mb-4">How It Works</h3>
-              <div className="space-y-3 text-sm text-gray-400">
-                <p><span className="text-purple-400 font-bold">1.</span> Deposit → Added to Merkle Tree</p>
-                <p><span className="text-purple-400 font-bold">2.</span> Wait for more deposits</p>
-                <p><span className="text-purple-400 font-bold">3.</span> ZK proof verifies your deposit</p>
-                <p><span className="text-green-400 font-bold">4.</span> Multi-hop → Untraceable</p>
-              </div>
-            </div>
           </div>
         </div>
 
-        {status && (
-          <div className={`fixed bottom-6 right-6 max-w-md p-5 rounded-2xl border backdrop-blur-xl shadow-2xl ${status.type === 'error' ? 'bg-red-500/10 border-red-500/20 text-red-400' : status.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
-            <pre className="whitespace-pre-wrap text-sm font-medium">{status.message}</pre>
+        {menuOpen && (
+          <div className="md:hidden border-t border-white/[0.08] bg-black/95 backdrop-blur-xl">
+            <div className="px-4 py-4 space-y-3">
+              <a href="/docs" className="block py-2 text-[11px] tracking-[0.2em] uppercase text-white/70">Docs</a>
+              <a href="https://x.com/shadowp40792" target="_blank" rel="noopener noreferrer" className="block py-2 text-[11px] tracking-[0.2em] uppercase text-white/70">X (Twitter)</a>
+              <a href="https://github.com/Shadowprtcl" target="_blank" rel="noopener noreferrer" className="block py-2 text-[11px] tracking-[0.2em] uppercase text-white/70">GitHub</a>
+            </div>
           </div>
         )}
+      </header>
+
+      {/* Hero */}
+      <main className="relative">
+        <div className="w-full px-4 md:px-8 py-12 md:py-20 lg:py-28">
+          <div className="text-center mb-16 md:mb-20 lg:mb-28 animate-fadeIn">
+            <div className="relative w-32 h-32 md:w-44 md:h-44 lg:w-56 lg:h-56 mx-auto mb-8 md:mb-12 group cursor-pointer">
+              <div className="hidden md:block absolute inset-0 rounded-full border border-[#8B5CF6]/20 animate-ping" style={{ animationDuration: '3s' }} />
+              <div className="absolute inset-0 blur-[60px] md:blur-[80px] bg-[#8B5CF6] opacity-30 group-hover:opacity-50 transition-opacity duration-500" />
+              <div className="relative w-full h-full flex items-center justify-center transform transition-all duration-500 group-hover:scale-110 group-hover:rotate-6">
+                <img src="/logo.png" alt="Shadow Protocol Logo" className="w-full h-full object-contain drop-shadow-[0_0_30px_rgba(139,92,246,0.5)]" />
+              </div>
+            </div>
+
+            <h1 className="text-[24px] md:text-[36px] lg:text-[48px] font-bold tracking-[0.1em] md:tracking-[0.15em] uppercase mb-3 bg-gradient-to-r from-white via-white to-[#8B5CF6] bg-clip-text text-transparent">Shadow Protocol</h1>
+            <p className="text-[10px] md:text-[12px] lg:text-[13px] tracking-[0.3em] md:tracking-[0.4em] uppercase text-white/50 mb-10 md:mb-14">Private • Anonymous • Untraceable</p>
+            
+            {/* Big Launch Button */}
+            <button 
+              onClick={handleLaunch} 
+              className="group relative px-10 md:px-14 py-4 md:py-5 bg-[#8B5CF6] text-white text-[11px] md:text-[12px] font-bold tracking-[0.25em] uppercase overflow-hidden hover:shadow-[0_0_60px_rgba(139,92,246,0.6)] transition-all duration-500"
+            >
+              <span className="relative z-10">Enter Protocol</span>
+              <div className="absolute inset-0 bg-gradient-to-r from-[#7C3AED] via-[#8B5CF6] to-[#6366F1] opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+              <div className="absolute inset-0 opacity-0 group-hover:opacity-30">
+                <div className="absolute inset-0 bg-white animate-shimmer" />
+              </div>
+            </button>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-4 md:gap-5 max-w-4xl mx-auto mb-14 md:mb-18">
+            {[
+              { title: 'Zero-Knowledge', desc: 'Cryptographic proofs ensure complete transaction privacy', icon: 'lock' },
+              { title: 'Multi-Hop Relay', desc: 'Random routing breaks on-chain analysis', icon: 'bolt' },
+              { title: 'Anonymity Sets', desc: 'Shared pools maximize privacy guarantees', icon: 'users' }
+            ].map((feature, i) => (
+              <div key={i} className="group bg-[#0a0a0f]/80 p-6 md:p-7 border border-white/[0.08] hover:border-[#8B5CF6]/30 transition-all duration-500">
+                <div className="w-12 h-12 md:w-14 md:h-14 border border-white/[0.1] group-hover:border-[#8B5CF6]/50 flex items-center justify-center text-[#8B5CF6]/70 group-hover:text-[#8B5CF6] mb-5 transition-all">
+                  {feature.icon === 'lock' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>}
+                  {feature.icon === 'bolt' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>}
+                  {feature.icon === 'users' && <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
+                </div>
+                <h3 className="text-[10px] md:text-[11px] font-bold tracking-[0.2em] uppercase mb-2 text-white group-hover:text-[#8B5CF6] transition-colors">{feature.title}</h3>
+                <p className="text-[9px] md:text-[10px] tracking-[0.1em] uppercase text-white/40 leading-relaxed">{feature.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 md:gap-4 max-w-3xl mx-auto mb-14 md:mb-18">
+            {[{ label: 'Privacy', value: 'Maximum' }, { label: 'Proof', value: 'Groth16' }, { label: 'Network', value: 'Solana' }].map((stat, i) => (
+              <div key={i} className="bg-[#0a0a0f]/80 p-5 md:p-6 text-center border border-white/[0.08] hover:border-[#8B5CF6]/30 transition-all">
+                <p className="text-[8px] md:text-[9px] tracking-[0.2em] uppercase text-white/35 mb-1">{stat.label}</p>
+                <p className="text-[10px] md:text-[12px] font-bold tracking-[0.15em] uppercase text-[#8B5CF6]">{stat.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Bottom CTA */}
+          <div className="text-center">
+            <div className="inline-block border border-white/[0.1] bg-[#0a0a0f]/80 p-8 md:p-10 hover:border-[#8B5CF6]/30 transition-all">
+              <h3 className="text-[13px] md:text-[15px] font-bold tracking-[0.2em] uppercase mb-3">Ready to go private?</h3>
+              <p className="text-[9px] md:text-[10px] tracking-[0.15em] uppercase text-white/40 mb-6">Anonymous transfers in seconds</p>
+              <button 
+                onClick={handleLaunch} 
+                className="px-10 py-4 bg-[#8B5CF6] text-white text-[10px] font-bold tracking-[0.25em] uppercase hover:bg-[#7C3AED] hover:shadow-[0_0_40px_rgba(139,92,246,0.5)] transition-all"
+              >
+                Launch Protocol
+              </button>
+            </div>
+          </div>
+        </div>
       </main>
+
+      {/* Footer - More visible */}
+      <footer className="relative border-t border-white/[0.1] mt-10 md:mt-16">
+        <div className="w-full px-4 md:px-8 py-6 md:py-8">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <img src="/logo.png" alt="Shadow" className="w-5 h-5 object-contain opacity-70" />
+              <span className="text-[10px] tracking-[0.2em] uppercase text-white/50 font-bold">Shadow Protocol 2026</span>
+            </div>
+            <div className="flex items-center gap-8">
+              <a href="/docs" className="text-[10px] tracking-[0.15em] uppercase text-white/40 hover:text-[#8B5CF6] transition-colors font-bold">Docs</a>
+              <a href="https://github.com/Shadowprtcl" target="_blank" className="text-[10px] tracking-[0.15em] uppercase text-white/40 hover:text-[#8B5CF6] transition-colors font-bold">GitHub</a>
+              <a href="https://x.com/shadowp40792" target="_blank" className="text-[10px] tracking-[0.15em] uppercase text-white/40 hover:text-[#8B5CF6] transition-colors font-bold">X</a>
+            </div>
+          </div>
+        </div>
+      </footer>
+
+      <style jsx global>{`
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+        @keyframes launchFlash { 0% { opacity: 0; } 20% { opacity: 1; } 100% { opacity: 1; } }
+        @keyframes launchZoom { 0% { transform: scale(0.5); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
+        @keyframes particleBurst { 0% { transform: rotate(var(--rotation, 0deg)) translateX(0); opacity: 1; } 100% { transform: rotate(var(--rotation, 0deg)) translateX(200px); opacity: 0; } }
+        .animate-fadeIn { animation: fadeIn 1s ease-out forwards; }
+        .animate-shimmer { animation: shimmer 2s infinite; }
+        .animate-launchFlash { animation: launchFlash 0.8s ease-out forwards; }
+        .animate-launchZoom { animation: launchZoom 0.6s ease-out forwards; }
+        .animate-particleBurst { animation: particleBurst 0.8s ease-out forwards; }
+      `}</style>
     </div>
   );
 }

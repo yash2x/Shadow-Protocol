@@ -1,26 +1,24 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-import WalletContextProvider from "@/components/WalletContextProvider";
-
-const inter = Inter({ subsets: ["latin"] });
+import type { Metadata } from 'next';
+import './globals.css';
+import '@solana/wallet-adapter-react-ui/styles.css';
+import Providers from '@/providers';
 
 export const metadata: Metadata = {
-  title: "Shadow Protocol",
-  description: "Private transactions on Solana",
+  title: 'Shadow Protocol — Anonymous SOL Transfers',
+  description: 'Send SOL anonymously using ZK proofs and multi-hop routing on Solana',
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <WalletContextProvider>
+      <body style={{ fontFamily: "'Space Mono', monospace" }}>
+        <Providers>
           {children}
-        </WalletContextProvider>
+        </Providers>
       </body>
     </html>
   );
