@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
 const { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, SystemProgram, LAMPORTS_PER_SOL } = require('@solana/web3.js');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
@@ -10,66 +9,19 @@ const { buildPoseidon } = require('circomlibjs');
 const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
-
-// [H-03 FIX] Restrict CORS to production domain
-app.use(cors({
-  origin: [
-    'https://shadow-protocol.xyz',
-    'http://localhost:3000',
-    'http://localhost:3001',
-  ],
-  methods: ['GET', 'POST'],
-  credentials: true,
-}));
-
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
 app.set('trust proxy', true);
-
-// [C-02 FIX] Rate limiting
-const withdrawLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 withdrawals per 15 min per IP
-  message: { error: 'Too many withdrawal requests, please try again later' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const depositLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20, // 20 deposits per 15 min per IP
-  message: { error: 'Too many deposit requests, please try again later' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100, // 100 requests per 15 min per IP
-  message: { error: 'Too many requests, please try again later' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use(globalLimiter);
 
 const PROGRAM_ID = new PublicKey('2PcmHz9KZ3RMwru56PthFJx7vyxe7cqJUgaE7QBFKvc4');
 const RPC_URL = 'https://api.devnet.solana.com';
 const connection = new Connection(RPC_URL, 'confirmed');
 
-// [M-05 FIX] Fail fast on missing env vars
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
-
-if (!supabaseUrl || !supabaseKey || !supabaseServiceKey) {
-  console.error('❌ Missing required environment variables:');
-  if (!supabaseUrl) console.error('   - SUPABASE_URL');
-  if (!supabaseKey) console.error('   - SUPABASE_KEY');
-  if (!supabaseServiceKey) console.error('   - SUPABASE_SERVICE_KEY');
-  process.exit(1);
-}
-
+const supabaseUrl = process.env.SUPABASE_URL || 'https://your-project.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'REDACTED_ANON_KEY';
 const supabase = createClient(supabaseUrl, supabaseKey);
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || 'REDACTED_SERVICE_KEY';
 const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 const verificationKey = JSON.parse(fs.readFileSync('./zk/verification_key.json', 'utf-8'));
@@ -77,13 +29,11 @@ const verificationKey = JSON.parse(fs.readFileSync('./zk/verification_key.json',
 const POOLS = {
   0: { poolPDA: new PublicKey('83SKixTFPBaENxEGhWSiSmxRHmTkXDWEJbfUt8iaSL8t'), vaultPDA: new PublicKey('7Z7Tzi5mecDXsXyFVZMiCjYkbLBnZJyb1pVo5q7EchNX'), denomination: 0.1 },
   1: { poolPDA: new PublicKey('34LMAtaxeTuiXAri9fH7jf1XUHjKhH51oZDoFfACgDw9'), vaultPDA: new PublicKey('35vdWyyLuthLWgLLZTksFyBZ7kGdVzW8zgXXtk54Rvms'), denomination: 1 },
-  2: { poolPDA: new PublicKey('cGhg9GRPoH3rfdiFiWQesPPGftbHQCLStQNM7yWrkRY'), vaultPDA: new PublicKey('2iWRhhSTmdxacoAAfzrfrUuntKT2CucNneX36FowYWvR'), denomination: 10 },
+  2: { poolPDA: new PublicKey('cGhg9GRPoH3rfdiFiWQesPPGftbHQCLStQNM7yWrkRY'), vaultPDA: new PublicKey('2iWRhhSTmdxacoAAfzrfrUuntKT2CucNneX36FowYWvR'), denomination: 10 }
 };
 
 const FAUCET_AMOUNT = 0.3;
 const FAUCET_COOLDOWN = 6 * 60 * 60 * 1000;
-const MAX_QUEUE_SIZE = 100; // [H-01 FIX] Maximum pending withdrawals
-const BN128_FIELD_ORDER = BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
 
 let faucetWallet = null;
 const faucetPath = './wallets/faucet.json';
@@ -93,51 +43,7 @@ if (fs.existsSync(faucetPath)) {
   console.log('✓ Faucet wallet loaded:', faucetWallet.publicKey.toString());
 }
 
-// [C-01 FIX] Persist nullifiers to disk + database
 const usedNullifiers = new Set();
-const NULLIFIERS_PATH = './wallets/nullifiers.json';
-
-function saveNullifiersToDisk() {
-  try {
-    const data = JSON.stringify([...usedNullifiers]);
-    const tmpPath = NULLIFIERS_PATH + '.tmp';
-    fs.writeFileSync(tmpPath, data); // [L-01 FIX] Write to temp file first
-    fs.renameSync(tmpPath, NULLIFIERS_PATH); // Atomic rename
-  } catch (err) {
-    console.error('⚠️ Failed to save nullifiers:', err.message);
-  }
-}
-
-function loadNullifiersFromDisk() {
-  try {
-    if (fs.existsSync(NULLIFIERS_PATH)) {
-      const data = JSON.parse(fs.readFileSync(NULLIFIERS_PATH, 'utf-8'));
-      data.forEach(n => usedNullifiers.add(n));
-      console.log('✓ Loaded ' + usedNullifiers.size + ' nullifiers from disk');
-    }
-  } catch (err) {
-    console.error('⚠️ Failed to load nullifiers:', err.message);
-  }
-}
-
-async function loadNullifiersFromDB() {
-  try {
-    const { data, error } = await supabaseAdmin
-      .from('completed_withdrawals')
-      .select('nullifier_hash')
-      .not('nullifier_hash', 'is', null);
-    
-    if (!error && data) {
-      data.forEach(row => {
-        if (row.nullifier_hash) usedNullifiers.add(row.nullifier_hash);
-      });
-      console.log('✓ Total nullifiers after DB sync: ' + usedNullifiers.size);
-    }
-  } catch (err) {
-    console.error('⚠️ Failed to load nullifiers from DB:', err.message);
-  }
-}
-
 const merkleTrees = { 0: new MerkleTree(20), 1: new MerkleTree(20), 2: new MerkleTree(20) };
 
 let poseidon = null;
@@ -203,26 +109,9 @@ async function verifyProof(proof, publicSignals) {
   }
 }
 
-// [L-02 FIX] Check relayer balance before executing
-async function checkRelayerBalance(relayer, requiredLamports) {
-  try {
-    const balance = await connection.getBalance(relayer.wallet.publicKey);
-    return balance >= requiredLamports + 10000; // +10000 for fees
-  } catch {
-    return false;
-  }
-}
-
-// [L-03 FIX] Confirm transaction with timeout
-async function confirmWithTimeout(signature, blockhash, lastValidBlockHeight, timeoutMs = 60000) {
-  return Promise.race([
-    connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight }),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Transaction confirmation timeout')), timeoutMs)),
-  ]);
-}
-
 async function executeWithdrawal(withdrawal) {
   const { id, nullifierHash, finalAddress, poolId, relayer, numHops } = withdrawal;
+
   const denomination = POOLS[poolId].denomination;
   const denominationLamports = Math.floor(denomination * LAMPORTS_PER_SOL);
 
@@ -230,22 +119,6 @@ async function executeWithdrawal(withdrawal) {
   console.log('   Relayer #' + relayer.id + ' | ' + denomination + ' SOL | ' + numHops + ' hops');
 
   try {
-    // [L-02 FIX] Check relayer balance
-    const hasBalance = await checkRelayerBalance(relayer, denominationLamports);
-    if (!hasBalance) {
-      // Try another relayer
-      const altRelayer = relayers.find(r => r.id !== relayer.id);
-      if (altRelayer) {
-        const altHasBalance = await checkRelayerBalance(altRelayer, denominationLamports);
-        if (altHasBalance) {
-          console.log('   ⚠️ Relayer #' + relayer.id + ' low balance, switching to #' + altRelayer.id);
-          withdrawal.relayer = altRelayer;
-          return executeWithdrawal(withdrawal);
-        }
-      }
-      throw new Error('No relayer with sufficient balance');
-    }
-
     const pool = POOLS[poolId];
     const hopRelayers = getRandomHopRelayers(relayer.id, numHops - 1);
 
@@ -279,7 +152,7 @@ async function executeWithdrawal(withdrawal) {
     transaction.sign(relayer.wallet);
 
     const signature = await connection.sendRawTransaction(transaction.serialize());
-    await confirmWithTimeout(signature, blockhash, lastValidBlockHeight); // [L-03 FIX]
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
 
     console.log('   ✓ Vault withdrawal: ' + signature.slice(0, 16) + '...');
 
@@ -309,7 +182,7 @@ async function executeWithdrawal(withdrawal) {
       transferTx.sign(currentWallet);
 
       const hopSig = await connection.sendRawTransaction(transferTx.serialize());
-      await confirmWithTimeout(hopSig, txBlockhash, txHeight); // [L-03 FIX]
+      await connection.confirmTransaction({ signature: hopSig, blockhash: txBlockhash, lastValidBlockHeight: txHeight });
 
       console.log('   ✓ Hop ' + (i + 1) + ': ' + hopSig.slice(0, 16) + '...');
       finalSignature = hopSig;
@@ -319,53 +192,36 @@ async function executeWithdrawal(withdrawal) {
       }
     }
 
-    // [C-01 FIX] Persist nullifier
     usedNullifiers.add(nullifierHash);
-    saveNullifiersToDisk();
 
     withdrawal.status = 'completed';
     withdrawal.completedAt = Date.now();
     withdrawal.finalSignature = finalSignature;
     completedWithdrawals.push(withdrawal);
 
-    // [H-01 FIX] Remove from queue after completion
-    const queueIndex = withdrawQueue.findIndex(w => w.id === id);
-    if (queueIndex !== -1) withdrawQueue.splice(queueIndex, 1);
-
-    // Persist to DB with nullifier hash
+    // Persister en base pour survivre aux restarts
     const { error: insertErr } = await supabaseAdmin.from('completed_withdrawals').insert([{
       id: withdrawal.id,
-      nullifier_hash: nullifierHash,
       amount: denomination,
       final_signature: finalSignature,
       completed_at: new Date().toISOString(),
     }]);
     if (insertErr) console.log('   ⚠️ Insert warning:', insertErr.message);
 
-    // Keep only last 1000 completed withdrawals in memory
-    if (completedWithdrawals.length > 1000) {
-      completedWithdrawals.splice(0, completedWithdrawals.length - 1000);
-    }
-
     console.log('   ✅ Completed! ' + denomination + ' SOL → ' + finalAddress.slice(0, 8) + '...');
+
     return { success: true, signature: finalSignature, amount: denomination };
   } catch (error) {
     console.log('   ❌ Error: ' + error.message);
     withdrawal.status = 'failed';
     withdrawal.error = error.message;
-
-    // [H-01 FIX] Remove failed withdrawals from queue
-    const queueIndex = withdrawQueue.findIndex(w => w.id === id);
-    if (queueIndex !== -1) withdrawQueue.splice(queueIndex, 1);
-
     return { success: false, error: error.message };
   }
 }
 
 setInterval(async () => {
   const now = Date.now();
-  // Process pending withdrawals
-  for (const withdrawal of [...withdrawQueue]) { // spread to avoid mutation issues
+  for (const withdrawal of withdrawQueue) {
     if (withdrawal.status === 'pending' && now >= withdrawal.executeAt) {
       withdrawal.status = 'processing';
       await executeWithdrawal(withdrawal);
@@ -392,7 +248,7 @@ app.get('/status', async (req, res) => {
   }
 
   res.json({
-    version: '7.0.0',
+    version: '6.9.0',
     status: 'online',
     relayerCount: relayers.length,
     zkEnabled: true,
@@ -403,7 +259,7 @@ app.get('/status', async (req, res) => {
       enabled: !!faucetWallet,
       balance: faucetBalance,
       claimAmount: FAUCET_AMOUNT,
-      address: faucetWallet?.publicKey.toString() || null,
+      address: faucetWallet?.publicKey.toString() || null
     },
     pools: {
       0: { deposits: merkleTrees[0].leaves.length, denomination: '0.1 SOL' },
@@ -412,7 +268,6 @@ app.get('/status', async (req, res) => {
     },
     pendingWithdrawals: withdrawQueue.filter(w => w.status === 'pending').length,
     totalCompleted: completedWithdrawals.length,
-    nullifiersTracked: usedNullifiers.size,
   });
 });
 
@@ -422,16 +277,18 @@ app.get('/faucet/status', async (req, res) => {
   if (!faucetWallet) {
     return res.status(503).json({ error: 'Faucet not available' });
   }
+
   try {
     const balance = await connection.getBalance(faucetWallet.publicKey) / LAMPORTS_PER_SOL;
     const claimsRemaining = Math.floor(balance / FAUCET_AMOUNT);
+
     res.json({
       enabled: true,
       balance,
       claimAmount: FAUCET_AMOUNT,
       claimsRemaining,
       cooldownHours: 24,
-      address: faucetWallet.publicKey.toString(),
+      address: faucetWallet.publicKey.toString()
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -449,9 +306,11 @@ app.post('/faucet/claim', async (req, res) => {
   if (!faucetWallet) {
     return res.status(503).json({ error: 'Faucet not available' });
   }
+
   if (!walletAddress) {
     return res.status(400).json({ error: 'Wallet address required' });
   }
+
   try {
     new PublicKey(walletAddress);
   } catch {
@@ -460,6 +319,7 @@ app.post('/faucet/claim', async (req, res) => {
 
   try {
     const oneDayAgo = new Date(Date.now() - FAUCET_COOLDOWN).toISOString();
+
     const { data: existingClaims, error: checkError } = await supabase
       .from('faucet_claims')
       .select('*')
@@ -481,9 +341,10 @@ app.post('/faucet/claim', async (req, res) => {
         return res.status(429).json({
           error: 'Wallet already claimed',
           hoursRemaining: hoursLeft,
-          nextClaimAt: new Date(new Date(walletClaim.created_at).getTime() + FAUCET_COOLDOWN).toISOString(),
+          nextClaimAt: new Date(new Date(walletClaim.created_at).getTime() + FAUCET_COOLDOWN).toISOString()
         });
       }
+
       if (ipClaim) {
         const timeLeft = FAUCET_COOLDOWN - (Date.now() - new Date(ipClaim.created_at).getTime());
         const hoursLeft = Math.ceil(timeLeft / (60 * 60 * 1000));
@@ -491,7 +352,7 @@ app.post('/faucet/claim', async (req, res) => {
         return res.status(429).json({
           error: 'IP address already claimed today',
           hoursRemaining: hoursLeft,
-          nextClaimAt: new Date(new Date(ipClaim.created_at).getTime() + FAUCET_COOLDOWN).toISOString(),
+          nextClaimAt: new Date(new Date(ipClaim.created_at).getTime() + FAUCET_COOLDOWN).toISOString()
         });
       }
     }
@@ -520,7 +381,7 @@ app.post('/faucet/claim', async (req, res) => {
     transferTx.sign(faucetWallet);
 
     const signature = await connection.sendRawTransaction(transferTx.serialize());
-    await confirmWithTimeout(signature, blockhash, lastValidBlockHeight);
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
 
     console.log('   ✅ Sent! TX:', signature.slice(0, 16) + '...');
 
@@ -530,7 +391,7 @@ app.post('/faucet/claim', async (req, res) => {
         wallet_address: walletAddress,
         ip_address: clientIP,
         amount: FAUCET_AMOUNT,
-        tx_signature: signature,
+        tx_signature: signature
       }]);
 
     if (insertError) {
@@ -545,8 +406,9 @@ app.post('/faucet/claim', async (req, res) => {
       signature,
       message: `${FAUCET_AMOUNT} SOL sent to your wallet!`,
       faucetBalance: newBalance,
-      nextClaimAt: new Date(Date.now() + FAUCET_COOLDOWN).toISOString(),
+      nextClaimAt: new Date(Date.now() + FAUCET_COOLDOWN).toISOString()
     });
+
   } catch (error) {
     console.log('   ❌ Error:', error.message);
     res.status(500).json({ error: error.message });
@@ -559,6 +421,7 @@ app.get('/faucet/check/:walletAddress', async (req, res) => {
 
   try {
     const oneDayAgo = new Date(Date.now() - FAUCET_COOLDOWN).toISOString();
+
     const { data: existingClaims } = await supabase
       .from('faucet_claims')
       .select('*')
@@ -571,59 +434,33 @@ app.get('/faucet/check/:walletAddress', async (req, res) => {
       const claim = existingClaims[0];
       const nextClaimAt = new Date(new Date(claim.created_at).getTime() + FAUCET_COOLDOWN);
       const hoursRemaining = Math.ceil((nextClaimAt.getTime() - Date.now()) / (60 * 60 * 1000));
+
       res.json({
         canClaim: false,
         reason: claim.wallet_address === walletAddress ? 'wallet' : 'ip',
         lastClaim: claim.created_at,
         nextClaimAt: nextClaimAt.toISOString(),
-        hoursRemaining,
+        hoursRemaining
       });
     } else {
-      res.json({ canClaim: true });
+      res.json({
+        canClaim: true
+      });
     }
   } catch (error) {
     res.json({ canClaim: true });
   }
 });
 
-// ============== DEPOSIT ROUTE ==============
+// ============== EXISTING ROUTES ==============
 
-app.post('/deposit', depositLimiter, async (req, res) => {
+app.post('/deposit', async (req, res) => {
   try {
     const { commitment, poolId } = req.body;
-
-    // [M-01 FIX] Validate commitment
-    if (!commitment) {
-      return res.status(400).json({ error: 'Missing commitment' });
-    }
-
-    let commitmentBigInt;
-    try {
-      commitmentBigInt = BigInt(commitment);
-    } catch {
-      return res.status(400).json({ error: 'Invalid commitment format' });
-    }
-
-    if (commitmentBigInt === BigInt(0)) {
-      return res.status(400).json({ error: 'Commitment cannot be zero' });
-    }
-
-    if (commitmentBigInt < BigInt(0) || commitmentBigInt >= BN128_FIELD_ORDER) {
-      return res.status(400).json({ error: 'Commitment out of field range' });
-    }
+    if (!commitment) return res.status(400).json({ error: 'Missing commitment' });
 
     const pid = poolId !== undefined ? parseInt(poolId) : 1;
-    if (![0, 1, 2].includes(pid)) {
-      return res.status(400).json({ error: 'Invalid pool ID' });
-    }
-
     const tree = merkleTrees[pid];
-
-    // Check for duplicate commitment
-    if (tree.hasCommitment(commitment)) {
-      return res.status(400).json({ error: 'Duplicate commitment' });
-    }
-
     const index = tree.insert(commitment);
     tree.saveToDisk(`/var/www/shadow/agent/wallets/merkle_pool_${pid}.json`);
     const newRoot = tree.getRoot();
@@ -643,12 +480,8 @@ app.get('/merkle-proof/:poolId/:commitment', async (req, res) => {
   try {
     const { poolId, commitment } = req.params;
     const pid = parseInt(poolId);
-
-    if (![0, 1, 2].includes(pid)) {
-      return res.status(400).json({ error: 'Invalid pool ID' });
-    }
-
     const tree = merkleTrees[pid];
+
     const index = tree.getLeafIndex(commitment);
     if (index === -1) return res.status(404).json({ error: 'Commitment not found' });
 
@@ -665,36 +498,18 @@ app.get('/merkle-proof/:poolId/:commitment', async (req, res) => {
   }
 });
 
-// ============== WITHDRAW ROUTE ==============
-
-app.post('/withdraw', withdrawLimiter, async (req, res) => {
+app.post('/withdraw', async (req, res) => {
   try {
     const { proof, publicSignals, recipientAddress, poolId } = req.body;
-    const pid = poolId !== undefined ? parseInt(poolId) : 1;
 
-    if (![0, 1, 2].includes(pid)) {
-      return res.status(400).json({ error: 'Invalid pool ID' });
-    }
+    const pid = poolId !== undefined ? parseInt(poolId) : 1;
 
     console.log('\n📤 Withdraw request:');
     console.log('   Pool: ' + pid + ' | Denomination: ' + POOLS[pid].denomination + ' SOL');
-    console.log('   Recipient: ' + recipientAddress?.slice(0, 8) + '...');
+    console.log('   Recipient: ' + recipientAddress.slice(0, 8) + '...');
 
     if (!proof || !publicSignals || !recipientAddress) {
       return res.status(400).json({ error: 'Missing fields' });
-    }
-
-    // Validate recipient address
-    try {
-      new PublicKey(recipientAddress);
-    } catch {
-      return res.status(400).json({ error: 'Invalid recipient address' });
-    }
-
-    // [H-01 FIX] Check queue size
-    const pendingCount = withdrawQueue.filter(w => w.status === 'pending').length;
-    if (pendingCount >= MAX_QUEUE_SIZE) {
-      return res.status(503).json({ error: 'Withdrawal queue full, please try again later' });
     }
 
     const root = publicSignals[0];
@@ -744,10 +559,6 @@ app.post('/withdraw', withdrawLimiter, async (req, res) => {
 
     withdrawQueue.push(withdrawal);
 
-    // Immediately mark nullifier to prevent concurrent double-spend
-    usedNullifiers.add(nullifierHash);
-    saveNullifiersToDisk();
-
     const delaySeconds = Math.floor(delay / 1000);
     const delayFormatted = delaySeconds >= 60 ? Math.floor(delaySeconds / 60) + 'm' + (delaySeconds % 60) + 's' : delaySeconds + 's';
 
@@ -779,6 +590,7 @@ app.get('/withdraw/:id', async (req, res) => {
   const withdrawal = withdrawQueue.find(w => w.id === id) || completedWithdrawals.find(w => w.id === id);
 
   if (!withdrawal) {
+    // Chercher en base si pas en mémoire (après restart agent)
     try {
       const { data } = await supabaseAdmin.from('completed_withdrawals').select('*').eq('id', id).single();
       if (data) return res.json({ id: data.id, status: 'completed', finalSignature: data.final_signature, amount: data.amount });
@@ -817,6 +629,7 @@ async function triggerDeadManVault(vault) {
       return { success: false, error: 'No ZK note' };
     }
 
+    // Créer un pending_transfer avec le message crypté et la clé publique
     const { error: insertErr } = await supabaseAdmin.from('pending_transfers').insert([{
       recipient_pseudo: vault.beneficiary_pseudo,
       encrypted_note: vault.zk_note,
@@ -833,9 +646,10 @@ async function triggerDeadManVault(vault) {
       return { success: false, error: insertErr.message };
     }
 
-    await supabaseAdmin.from('dead_vaults').update({
-      triggered: true,
-      trigger_tx: 'ZK_PRIVATE_' + Date.now(),
+    // Marquer le vault comme triggered
+    await supabase.from('dead_vaults').update({ 
+      triggered: true, 
+      trigger_tx: 'ZK_PRIVATE_' + Date.now()
     }).eq('id', vault.id);
 
     console.log('   ✅ ZK note + encrypted message sent to @' + vault.beneficiary_pseudo);
@@ -848,22 +662,21 @@ async function triggerDeadManVault(vault) {
   }
 }
 
-// [M-04 FIX] Check dead man vaults every 10 minutes instead of 1 hour
 const checkDeadManVaults = async () => {
   try {
     const { data: vaults, error } = await supabase
       .from('dead_vaults')
       .select('*')
       .eq('triggered', false);
-
+      
     if (error || !vaults || vaults.length === 0) return;
-
+    
     const now = Date.now();
-
+    
     for (const vault of vaults) {
       const lastCheckin = new Date(vault.last_checkin).getTime();
       const deadlineMs = lastCheckin + vault.interval_days * 24 * 60 * 60 * 1000;
-
+      
       if (now > deadlineMs) {
         await triggerDeadManVault(vault);
       }
@@ -873,9 +686,9 @@ const checkDeadManVaults = async () => {
   }
 };
 
-setInterval(checkDeadManVaults, 10 * 60 * 1000); // Every 10 minutes
+setInterval(checkDeadManVaults, 60 * 60 * 1000);
 setTimeout(checkDeadManVaults, 10000);
-console.log('✓ Dead Man Switch checker enabled (every 10 min, ZK privacy mode)');
+console.log('✓ Dead Man Switch checker enabled (ZK privacy mode)');
 
 
 app.post('/deadman/trigger', async (req, res) => {
@@ -902,17 +715,17 @@ app.post('/deadman/trigger', async (req, res) => {
     }
 
     const result = await triggerDeadManVault(vault);
-
+    
     if (result.success) {
-      res.json({
-        success: true,
+      res.json({ 
+        success: true, 
         message: 'Dead Man Switch triggered with ZK privacy',
-        signature: 'ZK_PRIVATE',
+        signature: 'ZK_PRIVATE'
       });
     } else {
       res.status(500).json({ error: result.error });
     }
-  } catch (e) {
+  } catch(e) {
     console.error('Dead Man trigger error:', e.message);
     res.status(500).json({ error: e.message });
   }
@@ -922,27 +735,20 @@ app.post('/deadman/trigger', async (req, res) => {
 const PORT = 3002;
 
 async function start() {
-  console.log('\n🌑 SHADOW PROTOCOL AGENT v7.0.0');
+  console.log('\n🌑 SHADOW PROTOCOL AGENT v6.9.0');
   console.log('================================');
 
   await initMerkleTrees();
-
-  // [C-01 FIX] Load nullifiers from disk and DB
-  loadNullifiersFromDisk();
-  await loadNullifiersFromDB();
 
   console.log('✓ ' + relayers.length + ' Relayers');
   if (faucetWallet) {
     const balance = await connection.getBalance(faucetWallet.publicKey) / LAMPORTS_PER_SOL;
     console.log('✓ Faucet enabled (' + balance.toFixed(2) + ' SOL)');
   }
-  console.log('✓ ' + usedNullifiers.size + ' nullifiers loaded (anti-double-spend)');
   console.log('✓ ZK Proofs enabled');
   console.log('✓ Merkle Trees enabled');
   console.log('✓ Multi-hop relay');
   console.log('✓ Dead Man Switch (ZK + encrypted messages)');
-  console.log('✓ Rate limiting enabled');
-  console.log('✓ CORS restricted to production');
 
   app.listen(PORT, () => {
     console.log('🚀 Agent on http://localhost:' + PORT);

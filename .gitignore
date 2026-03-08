@@ -78,3 +78,6 @@ secrets/
 test-supabase.js
 test-storage.js
 clear-cache.html
+
+# Nullifier persistence (sensitive)
+agent/wallets/nullifiers.json
