@@ -1,152 +1,287 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import Image from 'next/image';
+import AnimatedBackground from '@/components/AnimatedBackground';
 
 export default function DocsPage() {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
 
   return (
-    <div className="min-h-screen bg-black text-white">
-      <div className="fixed inset-0 opacity-[0.02]">
-        <div className="absolute inset-0" style={{
-          backgroundImage: 'linear-gradient(#8B5CF6 1px, transparent 1px), linear-gradient(90deg, #8B5CF6 1px, transparent 1px)',
-          backgroundSize: '40px 40px'
-        }} />
-      </div>
+    <div className="text-[#1a1a1a] relative flex flex-col min-h-screen overflow-x-hidden bg-[#dddcd5]">
+      <AnimatedBackground />
 
-      <header className="relative border-b border-white/[0.06]">
-        <div className="max-w-7xl mx-auto px-4 lg:px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push('/')}>
-            <img src="/logo.png" alt="Shadow" className="w-6 h-6 object-contain" />
-            <span className="text-[11px] font-bold tracking-[0.2em] uppercase">Shadow</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <a href="https://x.com/shadowp40792" target="_blank" rel="noopener noreferrer" className="w-8 h-8 flex items-center justify-center border border-white/[0.08] hover:bg-white/[0.03] transition-all">
-              <svg className="w-3.5 h-3.5 text-white/60" fill="currentColor" viewBox="0 0 24 24"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" /></svg>
-            </a>
-            <a href="https://github.com/Shadowprtcl" target="_blank" rel="noopener noreferrer" className="w-8 h-8 flex items-center justify-center border border-white/[0.08] hover:bg-white/[0.03] transition-all">
-              <svg className="w-3.5 h-3.5 text-white/60" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" /></svg>
-            </a>
-            <button onClick={() => router.push('/main')} className="px-5 py-2 bg-[#8B5CF6] text-white text-[9px] tracking-[0.2em] uppercase font-bold hover:bg-[#7C3AED] transition-all">Launch App</button>
+      {/* Header Content - Exact match to Homepage */}
+      <header className="relative z-50 flex items-center px-6 lg:px-4 md:px-6 lg:px-4 md:px-6 lg:px-10 py-3 w-full border-b border-[#0a0a0a] bg-[#0a0a0a] gap-10">
+        <div className="flex items-center">
+          <div className="flex items-center gap-4 opacity-90 hover:opacity-100 transition-opacity cursor-pointer" onClick={() => router.push('/')}>
+            <div className="relative w-32 h-32 -ml-2 -my-6">
+              <Image
+                src="/logox.png"
+                alt="Shadow Protocol Logo"
+                fill
+                className="object-contain drop-shadow-[0_0_10px_rgba(176,38,255,0.4)]"
+                priority
+              />
+            </div>
           </div>
         </div>
+        <nav className="hidden md:flex items-center gap-10">
+          <a href="/" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b] hover:text-[#b026ff] transition-colors">PLATFORM +</a>
+          <a href="/main" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b] hover:text-[#b026ff] transition-colors">APP +</a>
+          <a href="/deadman" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b] hover:text-[#b026ff] transition-colors">DEAD +</a>
+          <a href="/docs" className="text-xs font-hud tracking-[0.2em] font-semibold text-white hover:text-[#b026ff] transition-colors">DOC +</a>
+        </nav>
+        <button onClick={() => setMenuOpen(!menuOpen)} className="md:hidden ml-auto w-10 h-10 flex items-center justify-center text-white">
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            {menuOpen ? <path strokeLinecap="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /> : <path strokeLinecap="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />}
+          </svg>
+        </button>
       </header>
 
-      <main className="relative max-w-4xl mx-auto px-4 lg:px-6 py-12 lg:py-20">
-        <div className="text-center mb-16">
-          <h1 className="text-[24px] lg:text-[32px] font-bold tracking-[0.2em] uppercase mb-4">Documentation</h1>
-          <p className="text-[10px] lg:text-[11px] tracking-[0.2em] uppercase text-white/30">Technical Overview of Shadow Protocol</p>
+      {/* Mobile Menu */}
+      {menuOpen && (
+        <div className="md:hidden relative z-50 bg-[#0a0a0a] border-b border-[#333] p-6">
+          <nav className="flex flex-col gap-6">
+            <a href="/" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b]">PLATFORM +</a>
+            <a href="/main" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b]">APP +</a>
+            <a href="/deadman" className="text-xs font-hud tracking-[0.2em] text-[#a1a39b]">DEAD +</a>
+            <a href="/docs" className="text-xs font-hud tracking-[0.2em] font-semibold text-white">DOC +</a>
+          </nav>
+        </div>
+      )}
+
+      {/* Main Container */}
+      <main className="relative z-40 max-w-5xl mx-auto px-6 py-16 lg:py-24 w-full">
+
+        {/* HERO TITLE */}
+        <div className="mb-16">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 border border-[#c3c5bc] bg-white/60 mb-6 clip-angled-tl relative group shadow-sm">
+            <div className="w-1.5 h-1.5 bg-[#b026ff] absolute top-1/2 -translate-y-1/2 left-3" />
+            <span className="text-[10px] font-mono tracking-[0.25em] font-bold text-[#666] ml-4 uppercase">Technical Overview</span>
+          </div>
+          <h1 className="text-2xl md:text-2xl md:text-5xl lg:text-6xl font-hud font-bold uppercase break-words mb-4 text-[#111] break-words">
+            DOCUMENTATION
+          </h1>
+          <p className="text-sm font-semibold tracking-[0.2em] uppercase text-[#888]">Shadow Protocol — Zero Knowledge Privacy on Solana</p>
         </div>
 
-        <div className="space-y-12">
-          <section className="border border-white/[0.06] bg-[#050505] p-6 lg:p-8">
-            <h2 className="text-[12px] lg:text-[14px] font-bold tracking-[0.2em] uppercase mb-4 text-[#8B5CF6]">Introduction</h2>
-            <p className="text-[10px] lg:text-[11px] text-white/50 leading-relaxed mb-4">Shadow Protocol is a privacy-preserving payment system built on Solana. It enables users to send SOL anonymously using zero-knowledge proofs, making transactions untraceable on the blockchain.</p>
-            <p className="text-[10px] lg:text-[11px] text-white/50 leading-relaxed">The protocol combines several cryptographic primitives including Poseidon hashes, Merkle trees, and Groth16 ZK-SNARKs to achieve maximum privacy while maintaining the speed and low costs of Solana.</p>
-          </section>
+        <div className="space-y-10">
 
-          <section className="border border-white/[0.06] bg-[#050505] p-6 lg:p-8">
-            <h2 className="text-[12px] lg:text-[14px] font-bold tracking-[0.2em] uppercase mb-4 text-[#8B5CF6]">Architecture</h2>
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2 text-white/80">Smart Contract (Solana Program)</h3>
-                <p className="text-[9px] lg:text-[10px] text-white/40 leading-relaxed">The on-chain program manages deposit pools and withdrawal logic. Each pool corresponds to a fixed denomination (0.1, 1, or 10 SOL). Deposits generate cryptographic commitments stored in a Merkle tree structure.</p>
+          {/* INTRODUCTION */}
+          <section className="bg-white border border-[#c3c5bc] p-8 lg:p-12 shadow-[10px_10px_30px_rgba(0,0,0,0.05)] clip-angled-br relative group">
+            <div className="absolute top-6 left-6 text-[#a1a39b] font-bold tracking-widest text-[14px]">+</div>
+
+            <div className="flex items-center gap-4 mb-8 ml-6">
+              <div className="w-10 h-10 bg-[#e2e4dd] border border-[#c3c5bc] flex items-center justify-center clip-angled-br">
+                <svg className="w-5 h-5 text-[#b026ff]" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="square" d="M12 6v12m0-12a4 4 0 10-8 0v12a4 4 0 108 0m0-12a4 4 0 118 0v12a4 4 0 11-8 0" />
+                </svg>
               </div>
-              <div>
-                <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2 text-white/80">Relay Network</h3>
-                <p className="text-[9px] lg:text-[10px] text-white/40 leading-relaxed">A decentralized network of relayers processes withdrawals. Relayers submit transactions on behalf of users, breaking the direct link between sender and recipient.</p>
-              </div>
-              <div>
-                <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2 text-white/80">ZK Proof System</h3>
-                <p className="text-[9px] lg:text-[10px] text-white/40 leading-relaxed">Groth16 ZK-SNARKs enable users to prove ownership of a deposit without revealing which deposit is theirs. The circuit verifies Merkle tree membership and nullifier uniqueness.</p>
-              </div>
+              <h2 className="text-xl md:text-2xl font-hud uppercase break-words tracking-[0.1em] text-[#111]">Introduction</h2>
+            </div>
+
+            <div className="ml-6 space-y-4 text-[14px] text-[#444] font-medium leading-relaxed max-w-3xl">
+              <p>
+                Shadow Protocol is a privacy-preserving payment system built on Solana. It enables users to send SOL anonymously using zero-knowledge proofs, making transactions untraceable on the blockchain.
+              </p>
+              <p>
+                The protocol combines several cryptographic primitives including Poseidon hashes, Merkle trees, and Groth16 ZK-SNARKs to achieve maximum privacy while maintaining the speed and low costs of Solana.
+              </p>
             </div>
           </section>
 
-          <section className="border border-white/[0.06] bg-[#050505] p-6 lg:p-8">
-            <h2 className="text-[12px] lg:text-[14px] font-bold tracking-[0.2em] uppercase mb-4 text-[#8B5CF6]">Cryptographic Primitives</h2>
+          {/* ARCHITECTURE */}
+          <section className="bg-[#f0f1ed] border border-[#c3c5bc] p-8 lg:p-12 shadow-inner relative">
+            <div className="absolute top-6 right-6 text-[#c3c5bc] font-bold tracking-widest text-[14px]">++</div>
+
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-1 h-8 bg-[#111]" />
+              <h2 className="text-xl md:text-2xl font-hud uppercase break-words tracking-[0.1em] text-[#111]">Architecture</h2>
+            </div>
+
+            <div className="space-y-6">
+              {[
+                { title: 'Smart Contract (Solana Program)', desc: 'The on-chain program manages deposit pools and withdrawal logic. Each pool corresponds to a fixed denomination (0.1, 1, or 10 SOL). Deposits generate cryptographic commitments stored in a Merkle tree structure.' },
+                { title: 'Relay Network', desc: 'A decentralized network of relayers processes withdrawals. Relayers submit transactions on behalf of users, breaking the direct link between sender and recipient.' },
+                { title: 'ZK Proof System', desc: 'Groth16 ZK-SNARKs enable users to prove ownership of a deposit without revealing which deposit is theirs. The circuit verifies Merkle tree membership and nullifier uniqueness.' },
+              ].map((item, i) => (
+                <div key={i} className="flex gap-6 p-6 bg-white border border-[#dddcd5] shadow-sm hover:border-[#b026ff]/30 transition-colors">
+                  <div className="text-3xl font-hud text-[#e2e4dd] leading-none pt-1">0{i + 1}</div>
+                  <div>
+                    <h3 className="text-[13px] font-bold tracking-[0.15em] uppercase mb-2 text-[#111]">{item.title}</h3>
+                    <p className="text-[13px] text-[#666] leading-relaxed font-medium">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* CRYPTOGRAPHIC PRIMITIVES */}
+          <section className="bg-white border border-[#c3c5bc] p-8 lg:p-12 shadow-[10px_10px_30px_rgba(0,0,0,0.05)] relative">
+            <div className="flex items-center gap-4 mb-8">
+              <div className="w-10 h-10 bg-[#e2e4dd] border border-[#c3c5bc] flex items-center justify-center rounded-sm">
+                <svg className="w-5 h-5 text-[#111]" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                  <path strokeLinecap="square" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+              <h2 className="text-xl md:text-2xl font-hud uppercase break-words tracking-[0.1em] text-[#111]">Primitives</h2>
+            </div>
+
             <div className="grid md:grid-cols-2 gap-6">
-              <div className="border border-white/[0.04] p-4">
-                <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 bg-[#8B5CF6]/50" /><h3 className="text-[9px] font-bold tracking-[0.15em] uppercase text-white/80">Poseidon Hash</h3></div>
-                <p className="text-[8px] lg:text-[9px] text-white/40 leading-relaxed">ZK-friendly hash function optimized for arithmetic circuits. Used for generating commitments and nullifier hashes.</p>
-              </div>
-              <div className="border border-white/[0.04] p-4">
-                <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 bg-[#8B5CF6]/50" /><h3 className="text-[9px] font-bold tracking-[0.15em] uppercase text-white/80">Merkle Tree</h3></div>
-                <p className="text-[8px] lg:text-[9px] text-white/40 leading-relaxed">20-level binary tree storing deposit commitments. Enables efficient membership proofs with O(log n) path verification.</p>
-              </div>
-              <div className="border border-white/[0.04] p-4">
-                <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 bg-[#8B5CF6]/50" /><h3 className="text-[9px] font-bold tracking-[0.15em] uppercase text-white/80">Groth16 ZK-SNARK</h3></div>
-                <p className="text-[8px] lg:text-[9px] text-white/40 leading-relaxed">Succinct proof system with constant-size proofs (~200 bytes). Provides complete privacy with efficient verification.</p>
-              </div>
-              <div className="border border-white/[0.04] p-4">
-                <div className="flex items-center gap-2 mb-3"><div className="w-2 h-2 bg-[#8B5CF6]/50" /><h3 className="text-[9px] font-bold tracking-[0.15em] uppercase text-white/80">Nullifiers</h3></div>
-                <p className="text-[8px] lg:text-[9px] text-white/40 leading-relaxed">Unique identifiers preventing double-spending. Derived from secret values, revealed during withdrawal without linking to deposits.</p>
+              {[
+                { title: 'Poseidon Hash', desc: 'ZK-friendly hash function optimized for arithmetic circuits. Used for generating commitments and nullifier hashes.' },
+                { title: 'Merkle Tree', desc: '20-level binary tree storing deposit commitments. Enables efficient membership proofs with O(log n) path verification.' },
+                { title: 'Groth16 ZK-SNARK', desc: 'Succinct proof system with constant-size proofs (~200 bytes). Provides complete privacy with efficient verification.' },
+                { title: 'Nullifiers', desc: 'Unique identifiers preventing double-spending. Derived from secret values, revealed during withdrawal without linking to deposits.' },
+              ].map((item, i) => (
+                <div key={i} className="p-6 border border-[#e2e4dd] bg-[#f8f9f7] hover:bg-white transition-all group relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-[#111] transform -translate-x-full group-hover:translate-x-0 transition-transform" />
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-1.5 h-1.5 bg-[#b026ff]" />
+                    <h3 className="text-[12px] font-bold tracking-[0.15em] uppercase text-[#111]">{item.title}</h3>
+                  </div>
+                  <p className="text-[13px] text-[#666] leading-relaxed font-medium">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* PROTOCOL FLOW */}
+          <section className="bg-white border-y lg:border border-[#c3c5bc] py-12 px-6 lg:p-12 relative overflow-hidden">
+            {/* Background wireframe accent */}
+            <div className="absolute top-0 right-0 w-64 h-64 border-[40px] border-[#f0f1ed] rounded-full translate-x-1/3 -translate-y-1/3 opacity-50 pointer-events-none" />
+
+            <div className="flex items-center gap-4 mb-10 relative z-10">
+              <h2 className="text-xl md:text-2xl font-hud uppercase break-words tracking-[0.1em] text-[#111]">Flow Data</h2>
+            </div>
+
+            <div className="relative pl-6 lg:pl-10 z-10">
+              {/* Vertical line connecting steps */}
+              <div className="absolute left-[11px] lg:left-[27px] top-2 bottom-6 w-0.5 bg-[#e2e4dd]" />
+
+              <div className="space-y-8">
+                {[
+                  { step: '1', title: 'Deposit Phase', desc: 'User generates random secret (s) and nullifier (n). Computes commitment C = Poseidon(s, n) and submits deposit with C to smart contract.' },
+                  { step: '2', title: 'Merkle Insertion', desc: 'Commitment inserted into Merkle tree. User receives encrypted note containing secret and nullifier for withdrawal routing.' },
+                  { step: '3', title: 'ZK Proof Gen', desc: 'User client generates ZK proof demonstrating knowledge of secret/nullifier and Merkle tree membership without disclosing specific leaves.' },
+                  { step: '4', title: 'Relay & Burn', desc: 'Proof submitted to random relayer. After verification and time-delay, relayer executes anonymous transfer to the designated recipient.' },
+                ].map((item, i) => (
+                  <div key={i} className="relative flex gap-6 lg:gap-8 items-start">
+                    {/* Step indicator node */}
+                    <div className="absolute left-[-29px] lg:left-[-13px] top-1 w-4 h-4 rounded-none bg-white border-2 border-[#111] flex items-center justify-center z-10">
+                      <div className="w-1 h-1 bg-[#111]" />
+                    </div>
+                    <div>
+                      <h3 className="text-[13px] font-bold tracking-[0.1em] uppercase mb-2 text-[#111] flex items-center gap-3">
+                        <span className="text-[#b026ff] font-hud text-lg">0{item.step}</span> {item.title}
+                      </h3>
+                      <p className="text-[13px] text-[#666] leading-relaxed font-medium max-w-2xl">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </section>
 
-          <section className="border border-white/[0.06] bg-[#050505] p-6 lg:p-8">
-            <h2 className="text-[12px] lg:text-[14px] font-bold tracking-[0.2em] uppercase mb-6 text-[#8B5CF6]">Protocol Flow</h2>
-            <div className="space-y-6">
-              <div className="flex gap-4">
-                <div className="flex-shrink-0 w-10 h-10 border border-[#8B5CF6]/30 flex items-center justify-center"><span className="text-[12px] font-bold text-[#8B5CF6]">1</span></div>
-                <div>
-                  <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2">Deposit</h3>
-                  <p className="text-[9px] text-white/40 leading-relaxed">User generates random secret (s) and nullifier (n). Computes commitment C = Poseidon(s, n) and submits deposit with C to smart contract.</p>
-                </div>
+          {/* TWO COLUMN GRID FOR SPECS AND FEATURES */}
+          <div className="grid lg:grid-cols-2 gap-10">
+
+            {/* TECHNICAL SPECIFICATIONS */}
+            <section className="bg-white border border-[#c3c5bc] p-8 shadow-sm">
+              <h2 className="text-xl font-hud uppercase tracking-[0.1em] text-[#111] mb-6 border-b border-[#e2e4dd] pb-4">Tech Specs</h2>
+              <div className="space-y-3">
+                {[
+                  { label: 'Network', val: 'Solana Devnet' },
+                  { label: 'Proof System', val: 'Groth16' },
+                  { label: 'Hash Function', val: 'Poseidon' },
+                  { label: 'Merkle Depth', val: '20 levels' },
+                  { label: 'Pool Sizes', val: '0.1, 1, 10 SOL' },
+                  { label: 'Relayers', val: '5 nodes' },
+                  { label: 'Circuit', val: 'Circom 2.0' },
+                ].map((item, i) => (
+                  <div key={i} className="flex justify-between items-center py-2 border-b border-[#f0f1ed] last:border-0 hover:bg-[#f8f9f7] px-2 transition-colors">
+                    <span className="text-[11px] font-mono tracking-[0.1em] text-[#888]">{item.label}</span>
+                    <span className="text-[12px] font-bold text-[#111]">{item.val}</span>
+                  </div>
+                ))}
               </div>
-              <div className="flex gap-4">
-                <div className="flex-shrink-0 w-10 h-10 border border-[#8B5CF6]/30 flex items-center justify-center"><span className="text-[12px] font-bold text-[#8B5CF6]">2</span></div>
-                <div>
-                  <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2">Merkle Insertion</h3>
-                  <p className="text-[9px] text-white/40 leading-relaxed">Commitment inserted into Merkle tree. User receives note containing secret and nullifier for withdrawal.</p>
-                </div>
+            </section>
+
+            {/* ENCRYPTED MESSAGES */}
+            <section className="bg-white border border-t-[4px] border-[#c3c5bc] border-t-[#38BDF8] p-8 shadow-[10px_10px_30px_rgba(0,0,0,0.02)]">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-hud uppercase tracking-[0.1em] text-[#111]">Encrypted Messages</h2>
+                <span className="px-3 py-1 bg-[#38BDF8]/10 text-[#0284c7] font-bold text-[10px] tracking-widest uppercase border border-[#38BDF8]/20 hidden sm:block">
+                  Module Online
+                </span>
               </div>
-              <div className="flex gap-4">
-                <div className="flex-shrink-0 w-10 h-10 border border-[#8B5CF6]/30 flex items-center justify-center"><span className="text-[12px] font-bold text-[#8B5CF6]">3</span></div>
-                <div>
-                  <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2">Generate ZK Proof</h3>
-                  <p className="text-[9px] text-white/40 leading-relaxed">User generates ZK proof demonstrating knowledge of secret/nullifier and Merkle tree membership.</p>
-                </div>
+              <p className="text-[13px] text-[#666] font-medium leading-relaxed mb-6">
+                Shadow Protocol introduces end-to-end encrypted messaging attached to private transfers. When sending SOL to a @username, the sender can optionally include a private note that only the recipient can decrypt.
+              </p>
+              <div className="space-y-4">
+                {[
+                  { label: 'Algorithm', val: 'NaCl Box (Curve25519 + XSalsa20 + Poly1305)' },
+                  { label: 'Key Setup', val: 'Secret key stays in localStorage. Public key in DB.' },
+                  { label: 'Flow', val: 'Client encrypts with Recipient PubKey. DB stores ciphertext. Client decrypts locally.' },
+                ].map((item, i) => (
+                  <div key={i} className="bg-[#f0f1ed] p-3 border-l-2 border-[#38BDF8]">
+                    <h4 className="text-[10px] font-bold tracking-[0.15em] uppercase text-[#111] mb-1">{item.label}</h4>
+                    <p className="text-[12px] text-[#666] font-medium">{item.val}</p>
+                  </div>
+                ))}
               </div>
-              <div className="flex gap-4">
-                <div className="flex-shrink-0 w-10 h-10 border border-[#8B5CF6]/30 flex items-center justify-center"><span className="text-[12px] font-bold text-[#8B5CF6]">4</span></div>
-                <div>
-                  <h3 className="text-[10px] font-bold tracking-[0.15em] uppercase mb-2">Relay and Withdraw</h3>
-                  <p className="text-[9px] text-white/40 leading-relaxed">Proof submitted to random relayer. After verification and delay, relayer executes withdrawal to recipient.</p>
+            </section>
+
+          </div>
+
+          {/* DEAD MAN'S SWITCH */}
+          <section className="bg-[#111] text-white border border-[#333] p-8 lg:p-12 relative overflow-hidden clip-angled-tl">
+            {/* Warning stripes */}
+            <div className="absolute top-0 left-0 w-full h-2 bg-[repeating-linear-gradient(45deg,#ff3333,#ff3333_10px,#000_10px,#000_20px)]" />
+
+            <div className="absolute top-8 right-8 text-[#ff3333] font-bold tracking-widest text-[14px]">!!!</div>
+
+            <h2 className="text-xl md:text-2xl font-hud uppercase break-words tracking-[0.1em] text-[#ff3333] mb-4 mt-2">Dead Man's Switch</h2>
+
+            <p className="text-[14px] text-white/70 leading-relaxed mb-8 max-w-3xl">
+              An autonomous vault system that triggers anonymous SOL transfers if the owner fails to check in within a set interval. Combines time-locked logic with Shadow ZK routing for untraceable inheritance or failsafe executions.
+            </p>
+
+            <div className="grid md:grid-cols-2 gap-6">
+              {[
+                { title: 'Trigger Logic', desc: 'Owner defines check-in intervals (7d, 30d, 90d). Missing a check-in allows the autonomous relayer agent to fire the pre-signed ZK transaction.' },
+                { title: 'Private Routing', desc: 'Executions are routed via the Shadow layer. Observers cannot trace the origin vault of a received payload.' },
+              ].map((item, i) => (
+                <div key={i} className="border border-white/10 p-5 bg-white/[0.02]">
+                  <p className="text-[12px] font-bold tracking-[0.15em] uppercase text-white mb-2">{item.title}</p>
+                  <p className="text-[13px] text-white/50 leading-relaxed">{item.desc}</p>
                 </div>
-              </div>
+              ))}
             </div>
           </section>
 
-          <section className="border border-white/[0.06] bg-[#050505] p-6 lg:p-8">
-            <h2 className="text-[12px] lg:text-[14px] font-bold tracking-[0.2em] uppercase mb-4 text-[#8B5CF6]">Technical Specifications</h2>
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Network</span><span className="text-[9px] font-bold text-white/60">Solana Devnet</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Proof System</span><span className="text-[9px] font-bold text-white/60">Groth16</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Hash Function</span><span className="text-[9px] font-bold text-white/60">Poseidon</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Merkle Depth</span><span className="text-[9px] font-bold text-white/60">20 levels</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Pool Sizes</span><span className="text-[9px] font-bold text-white/60">0.1, 1, 10 SOL</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Relayers</span><span className="text-[9px] font-bold text-white/60">5 nodes</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Delay Range</span><span className="text-[9px] font-bold text-white/60">30s - 120s</span></div>
-              <div className="flex justify-between items-center py-2 border-b border-white/[0.04]"><span className="text-[8px] tracking-[0.15em] uppercase text-white/30">Circuit</span><span className="text-[9px] font-bold text-white/60">Circom 2.0</span></div>
-            </div>
-          </section>
         </div>
 
-        <div className="text-center mt-16">
-          <button onClick={() => router.push('/')} className="px-8 py-3 border border-white/[0.08] text-[9px] tracking-[0.2em] uppercase font-bold hover:bg-white/[0.03] transition-all">Back to Home</button>
+        {/* BACK BUTTON */}
+        <div className="mt-20 flex justify-center pb-20">
+          <button onClick={() => router.push('/')}
+            className="flex items-center gap-4 px-8 py-4 bg-white border border-[#c3c5bc] text-[#111] text-[13px] tracking-[0.2em] font-bold uppercase hover:bg-[#111] hover:text-white transition-colors shadow-sm">
+            <span className="text-xl leading-none">«</span>
+            RETURN TO HUB
+          </button>
         </div>
       </main>
 
-      <footer className="relative border-t border-white/[0.06] mt-12">
-        <div className="max-w-7xl mx-auto px-4 lg:px-6 py-6">
-          <div className="flex items-center justify-center gap-2">
-            <img src="/logo.png" alt="Shadow" className="w-4 h-4 object-contain opacity-50" />
-            <span className="text-[8px] tracking-[0.2em] uppercase text-white/25">Shadow Protocol 2025</span>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 }

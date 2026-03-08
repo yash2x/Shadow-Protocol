@@ -128,3 +128,16 @@ class MerkleTree {
 }
 
 module.exports = { MerkleTree };
+
+// Persistence
+const fs = require('fs');
+MerkleTree.prototype.saveToDisk = function(path) {
+  const data = { leaves: this.leaves.map(l => l.toString()) };
+  fs.writeFileSync(path, JSON.stringify(data));
+};
+MerkleTree.prototype.loadFromDisk = function(path) {
+  if (!fs.existsSync(path)) return false;
+  const data = JSON.parse(fs.readFileSync(path));
+  this.leaves = data.leaves.map(l => BigInt(l));
+  return true;
+};

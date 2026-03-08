@@ -73,3 +73,8 @@ supabase/.temp
 privatekey*
 *.secret
 secrets/
+
+# Test files
+test-supabase.js
+test-storage.js
+clear-cache.html
