@@ -4,6 +4,7 @@
 
 [![Website](https://img.shields.io/badge/Website-shadow--protocol.xyz-00DC82?style=flat-square)](https://shadow-protocol.xyz)
 [![Solana](https://img.shields.io/badge/Solana-Devnet-9945FF?style=flat-square&logo=solana)](https://solana.com)
+[![Audit](https://img.shields.io/badge/Audit-Passed-00DC82?style=flat-square&logo=shield)](audits/2026-03-08-internal-review.md)
 [![License](https://img.shields.io/badge/License-MIT-white?style=flat-square)](LICENSE)
 
 ---
@@ -15,7 +16,27 @@ Shadow Protocol is a privacy-preserving payment layer built on Solana. It combin
 The protocol enables users to deposit SOL into anonymity pools, transfer ownership privately via encrypted notes, and withdraw funds to any wallet — with no on-chain link between sender and recipient.
 
 **Network:** Solana Devnet  
-**Status:** Beta — unaudited, use at your own risk
+**Status:** Beta — internally audited, all findings resolved
+
+---
+
+## Security Audit
+
+Shadow Protocol has undergone an internal security review covering the relayer agent, Merkle tree implementation, ZK proof verification, API routes, client-side cryptography, and infrastructure configuration.
+
+**Results:** 14 findings identified and resolved — 2 Critical, 3 High, 5 Medium, 4 Low. Full report available in [`audits/2026-03-08-internal-review.md`](audits/2026-03-08-internal-review.md).
+
+Key security measures implemented:
+- Persistent nullifier tracking (anti-double-spend across restarts)
+- Rate limiting on all sensitive endpoints
+- CORS restricted to production domain
+- Input validation on all deposit commitments (field range, zero check, duplicate detection)
+- Transaction confirmation timeouts with retry logic
+- Relayer balance verification before withdrawal execution
+- Atomic file writes for state persistence
+- Wallet signature verification on stealth key registration
+
+> A formal audit by a specialized firm (OtterSec, Sec3) is planned before mainnet deployment.
 
 ---
 
@@ -31,7 +52,7 @@ Inspired by Monero's stealth address scheme. Each user generates a stealth meta-
 Users can exchange encrypted messages tied to transactions. Messages are encrypted client-side using NaCl `box` (X25519-XSalsa20-Poly1305) before being stored — the server never sees plaintext. Keypairs are derived per-user and stored locally.
 
 ### Dead Man Switch
-A configurable vault system that automatically releases funds to designated recipients if the owner fails to check in within a set time window. Trigger mechanism runs server-side via the relayer agent. Designed for inheritance planning and emergency fund distribution.
+A configurable vault system that automatically releases funds to designated recipients if the owner fails to check in within a set time window. Trigger mechanism runs server-side via the relayer agent (checked every 10 minutes). Designed for inheritance planning and emergency fund distribution.
 
 ### Embedded Wallet (Dynamic)
 Wallet creation and connection handled via [Dynamic](https://dynamic.xyz) SDK — supports embedded wallets (email/social login) alongside traditional Solana wallets (Phantom, Solflare, Backpack). Reduces onboarding friction for non-crypto-native users.
@@ -57,12 +78,14 @@ Solana RPC calls routed through [Helius](https://helius.dev) for enhanced reliab
 │     Supabase         │   │     Relayer Agent (Node.js)   │
 │                      │   │                               │
 │  PostgreSQL:         │   │  - Processes pending          │
-│  · User registry     │   │    withdrawals (cron 2s)      │
+│  · User registry     │   │    withdrawals (cron 5s)      │
 │  · Encrypted notes   │   │  - Merkle proof generation    │
-│  · Stealth meta-keys │   │  - Random delay (60-180s)     │
-│  · Dead man vaults   │   │  - Dead man switch trigger    │
+│  · Stealth meta-keys │   │  - Random delay (30-120s)     │
+│  · Dead man vaults   │   │  - Dead man switch (10 min)   │
 │  · Notifications     │   │  - Multi-hop relaying         │
 │                      │   │  - 5 relayer wallets          │
+│                      │   │  - Rate limiting              │
+│                      │   │  - Nullifier persistence      │
 └──────────────────────┘   └──────────────┬────────────────┘
                                           │
                                           ▼
@@ -91,9 +114,9 @@ Solana RPC calls routed through [Helius](https://helius.dev) for enhanced reliab
 | Wallet | Dynamic SDK | Embedded + external wallet support |
 | RPC | Helius | Enhanced Solana RPC |
 | Encryption | tweetnacl · nacl-util | Stealth addresses, E2E messaging (X25519) |
-| Relayer | Node.js | Automated withdrawals, dead man trigger |
+| Relayer | Node.js · express-rate-limit | Automated withdrawals, dead man trigger |
 | Database | Supabase (PostgreSQL) | User data, encrypted notes, vaults |
-| Hosting | VPS · PM2 · Nginx | Production deployment |
+| Hosting | VPS · systemd · Nginx | Production deployment |
 
 ---
 
@@ -141,10 +164,12 @@ shadow-protocol/
 │   ├── config.ts                 # Program IDs, pool addresses
 │   └── providers.tsx             # Dynamic SDK provider
 ├── agent/
-│   ├── index.js                  # Relayer agent (main loop)
+│   ├── index.js                  # Relayer agent v7.0.0
 │   ├── merkle.js                 # Merkle tree operations
 │   ├── fund-relayers.js          # Utility: fund relayer wallets
 │   └── generate-wallets.js       # Utility: generate relayer keypairs
+├── audits/
+│   └── 2026-03-08-internal-review.md  # Security audit report
 ├── public/
 │   ├── zk/                       # ZK artifacts (wasm, zkey, vkey)
 │   ├── sounds/                   # UI sound effects
@@ -166,8 +191,8 @@ shadow-protocol/
 
 ```bash
 # Clone
-git clone https://github.com/0x667TI/ShadowProtocol.git
-cd ShadowProtocol
+git clone https://github.com/yash2x/Shadow-Protocol.git
+cd Shadow-Protocol
 
 # Install dependencies
 npm install
@@ -199,7 +224,7 @@ npm install
 node index.js
 ```
 
-The agent processes pending withdrawals every 2 seconds and handles dead man switch triggers.
+The agent requires `SUPABASE_URL`, `SUPABASE_KEY`, and `SUPABASE_SERVICE_KEY` environment variables. It processes pending withdrawals every 5 seconds and checks dead man switch vaults every 10 minutes.
 
 ---
 
@@ -207,7 +232,7 @@ The agent processes pending withdrawals every 2 seconds and handles dead man swi
 
 The production instance runs on a VPS with:
 
-- **PM2** for process management
+- **systemd** for process management
 - **Nginx** as reverse proxy with SSL
 - **Let's Encrypt** for HTTPS certificates
 
@@ -215,21 +240,10 @@ The production instance runs on a VPS with:
 # Build
 npm run build
 
-# Start with PM2
-pm2 start npm --name "shadow-protocol" -- start
+# Start with systemd
+sudo systemctl start shadow-protocol
+sudo systemctl start shadow-agent
 ```
-
----
-
-## Security Considerations
-
-> **This software is experimental and unaudited. Do not use with real funds.**
-
-- Smart contract has not been formally audited
-- ZK circuits have not been formally audited
-- Currently deployed on Solana Devnet only
-- The relayer is centralized (single operator)
-- For maximum privacy: use a fresh wallet, connect via VPN/Tor, withdraw to a new address
 
 ---
 
@@ -244,9 +258,11 @@ pm2 start npm --name "shadow-protocol" -- start
 - [x] Dynamic embedded wallet integration
 - [x] Helius RPC integration
 - [x] Web Audio sound design
-- [ ] Smart contract audit
-- [ ] ZK circuit audit
+- [x] Internal security audit — all findings resolved
+- [ ] Formal audit (OtterSec / Sec3)
+- [ ] Token launch & tokenomics
 - [ ] Decentralized relayer network
+- [ ] Staking & governance
 - [ ] Mainnet deployment
 - [ ] Mobile app (React Native)
 - [ ] Cross-chain support
@@ -285,5 +301,5 @@ This software is provided "as is" without warranty of any kind. Shadow Protocol 
 <p align="center">
   <b>Shadow Protocol</b> — Privacy on Solana
   <br/>
-  <a href="https://shadow-protocol.xyz">Website</a> · <a href="https://github.com/0x667TI/ShadowProtocol/issues">Issues</a> · <a href="https://github.com/0x667TI/ShadowProtocol/discussions">Discussions</a>
+  <a href="https://shadow-protocol.xyz">Website</a> · <a href="https://github.com/yash2x/Shadow-Protocol/issues">Issues</a> · <a href="https://github.com/yash2x/Shadow-Protocol/discussions">Discussions</a>
 </p>
