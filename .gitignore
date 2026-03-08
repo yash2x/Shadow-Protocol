@@ -81,3 +81,6 @@ clear-cache.html
 
 # Nullifier persistence (sensitive)
 agent/wallets/nullifiers.json
+
+# Privacy cleanup logs
+/var/log/shadow-cleanup.log

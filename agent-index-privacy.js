@@ -24,7 +24,7 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '10mb' }));
-app.set('trust proxy', 1);
+app.set('trust proxy', true);
 
 // [C-02] Rate limiting
 const withdrawLimiter = rateLimit({
